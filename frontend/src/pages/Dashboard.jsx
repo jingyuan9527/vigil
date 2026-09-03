@@ -89,9 +89,16 @@ export default function Dashboard() {
             <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">状态分布</h3>
             <span className="text-xs text-zinc-400 dark:text-zinc-500">共 {totalDist} 个镜像</span>
           </div>
-          <div className="flex h-3 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
-            {dist.map((d) => (
-              <div key={d.label} className={`${d.color}`} style={{ width: `${(d.v / totalDist) * 100}%` }} />
+          <div className="flex h-3 w-full gap-0.5 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+            {dist.map((d, i) => (
+              <div
+                key={d.label}
+                className={`${d.color} transition-all duration-500`}
+                style={{
+                  width: `${(d.v / totalDist) * 100}%`,
+                  borderRadius: i === 0 ? '9999px 0 0 9999px' : i === dist.length - 1 ? '0 9999px 9999px 0' : '0',
+                }}
+              />
             ))}
           </div>
           <div className="mt-4 grid grid-cols-3 gap-3">
@@ -111,23 +118,27 @@ export default function Dashboard() {
             <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">最近更新动态</h3>
             <button onClick={() => navigate('/notifications')} className="text-xs font-medium text-bento-accent hover:underline">查看全部</button>
           </div>
-          <div className="space-y-2">
+          <div className="space-y-2.5">
             {updates.length === 0 && notifs.length === 0 && (
               <p className="py-8 text-center text-sm text-zinc-400 dark:text-zinc-500">暂无更新动态</p>
             )}
             {updates.slice(0, 5).map((i) => (
-              <div key={i.id} className="flex items-center justify-between rounded-xl border border-zinc-100 p-3 dark:border-zinc-800">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium text-zinc-800 dark:text-zinc-100">{i.reference}</div>
-                  <div className="font-mono text-[11px] text-zinc-400">本地 {shortDigest(i.local_digest)} → 远端 {shortDigest(i.remote_digest)}</div>
+              <div key={i.id} className="group/item rounded-xl border border-zinc-100 p-3 transition-colors hover:border-zinc-200 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:border-zinc-700 dark:hover:bg-zinc-800/50">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-zinc-800 dark:text-zinc-100">{i.reference}</div>
+                    <div className="mt-1 font-mono text-[11px] text-zinc-400">
+                      {shortDigest(i.local_digest)} → {shortDigest(i.remote_digest)}
+                    </div>
+                  </div>
+                  <StatusBadge status="update-available" />
                 </div>
-                <StatusBadge status="update-available" />
               </div>
             ))}
             {notifs.slice(0, 3).map((n) => (
-              <div key={n.id} className="rounded-xl border border-zinc-100 p-3 text-sm dark:border-zinc-800">
-                <div className="font-medium text-zinc-800 dark:text-zinc-100">{n.reference}</div>
-                <div className="text-xs text-zinc-400">{fmtTime(n.created_at)}</div>
+              <div key={n.id} className="rounded-xl border border-zinc-100 p-3 dark:border-zinc-800">
+                <div className="truncate text-sm font-medium text-zinc-800 dark:text-zinc-100">{n.reference}</div>
+                <div className="mt-1 text-xs text-zinc-400">{fmtTime(n.created_at)}</div>
               </div>
             ))}
           </div>

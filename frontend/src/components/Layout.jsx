@@ -104,7 +104,7 @@ export default function Layout() {
       {/* Main */}
       <main className="flex-1 overflow-hidden px-4 py-6 md:px-6 lg:px-8 lg:py-8">
         <div className="mx-auto max-w-6xl">
-          <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-zinc-100 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
             <div className="text-xs text-zinc-400 dark:text-zinc-500">
               最近扫描：
               <span className="font-medium text-zinc-600 dark:text-zinc-300">

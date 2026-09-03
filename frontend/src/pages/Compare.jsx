@@ -55,8 +55,10 @@ export default function Compare() {
               <button
                 key={i.id}
                 onClick={() => setParams({ id: String(i.id) })}
-                className={`bento-card flex w-full items-center justify-between p-3 text-left ${
-                  String(i.id) === id ? 'ring-2 ring-bento-accent' : ''
+                className={`bento-card flex w-full items-center justify-between p-3 text-left transition-all ${
+                  String(i.id) === id
+                    ? 'border-blue-500 bg-blue-50/50 ring-1 ring-blue-500/20 dark:bg-blue-900/10'
+                    : 'hover:border-zinc-200 dark:hover:border-zinc-700'
                 }`}
               >
                 <span className="truncate text-sm font-medium text-zinc-800 dark:text-zinc-100">{i.reference}</span>
@@ -111,15 +113,15 @@ export default function Compare() {
             <BentoCard>
               <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">版本时间线</h3>
               <p className="mb-4 text-xs text-zinc-400">每次扫描记录到的远端摘要快照</p>
-              <div className="space-y-3">
+              <div className="space-y-0">
                 {detail.versions && detail.versions.length ? (
                   detail.versions.map((v, idx) => (
-                    <div key={v.id} className="flex items-center gap-3">
-                      <div className="flex flex-col items-center">
-                        <span className={`h-3 w-3 rounded-full ${idx === 0 ? 'bg-orange-500' : 'bg-zinc-300 dark:bg-zinc-600'}`} />
+                    <div key={v.id} className="flex items-start gap-3">
+                      <div className="flex flex-col items-center pt-2">
+                        <span className={`h-3 w-3 shrink-0 rounded-full ring-2 ring-white dark:ring-zinc-900 ${idx === 0 ? 'bg-orange-500' : 'bg-zinc-300 dark:bg-zinc-600'}`} />
                         {idx < detail.versions.length - 1 && <span className="h-full w-px flex-1 bg-zinc-200 dark:bg-zinc-700" />}
                       </div>
-                      <div className="flex w-full items-center justify-between rounded-xl border border-zinc-100 px-3 py-2 dark:border-zinc-800">
+                      <div className="flex w-full items-center justify-between rounded-xl border border-zinc-100 px-3 py-2.5 transition-colors hover:border-zinc-200 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:border-zinc-700 dark:hover:bg-zinc-800/50">
                         <span className="font-mono text-sm text-zinc-700 dark:text-zinc-200">{shortDigest(v.digest)}</span>
                         <span className="text-xs text-zinc-400">{fmtTime(v.scanned_at)}</span>
                       </div>
@@ -139,9 +141,9 @@ export default function Compare() {
 
 function CompareCol({ title, tag, digest, accent }) {
   return (
-    <div className="rounded-2xl border border-zinc-100 p-4 dark:border-zinc-800">
+    <div className="rounded-2xl border border-zinc-100 p-4 transition-colors hover:border-zinc-200 dark:border-zinc-800 dark:hover:border-zinc-700">
       <div className="flex items-center gap-2">
-        <span className={`flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br ${accent} text-white`}>
+        <span className={`flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br ${accent} text-white shadow-sm`}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
         </span>
         <span className="text-sm font-medium text-zinc-700 dark:text-zinc-200">{title}</span>

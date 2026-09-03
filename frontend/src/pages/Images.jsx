@@ -115,13 +115,16 @@ export default function Images() {
       ) : (
         <div className="bento-grid">
           {filtered.map((img) => (
-            <BentoCard key={img.id} className="group">
+            <BentoCard key={img.id} className="group flex flex-col">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="truncate text-base font-semibold text-zinc-900 dark:text-zinc-100" title={img.reference}>
                     {img.reference}
                   </div>
-                  <div className="mt-0.5 text-xs text-zinc-400">{img.source === 'docker' ? '来自 Docker' : '手动监控'}</div>
+                  <div className="mt-0.5 flex items-center gap-1.5 text-xs text-zinc-400">
+                    <span className={`h-1.5 w-1.5 rounded-full ${img.source === 'docker' ? 'bg-blue-400' : 'bg-zinc-300 dark:bg-zinc-600'}`} />
+                    {img.source === 'docker' ? 'Docker' : '手动'}
+                  </div>
                 </div>
                 <StatusBadge status={img.status} />
               </div>
@@ -131,23 +134,24 @@ export default function Images() {
                 <DigestRow label="远端" value={shortDigest(img.remote_digest)} />
               </div>
 
-              <div className="mt-4 flex items-center justify-between text-xs text-zinc-400">
-                <span>{img.last_check ? fmtTime(img.last_check) : '未扫描'}</span>
-              </div>
-
-              <div className="mt-3 flex gap-2">
-                <button
-                  onClick={() => navigate('/compare?id=' + img.id)}
-                  className="flex-1 rounded-xl border border-zinc-200 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
-                >
-                  版本对比
-                </button>
-                <button
-                  onClick={() => onRemove(img.id)}
-                  className="rounded-xl border border-zinc-200 px-3 py-1.5 text-sm text-rose-500 transition-colors hover:bg-rose-50 dark:border-zinc-700 dark:hover:bg-rose-500/10"
-                >
-                  移除
-                </button>
+              <div className="mt-auto pt-3">
+                <div className="mb-3 text-xs text-zinc-400">
+                  {img.last_check ? fmtTime(img.last_check) : '未扫描'}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => navigate('/compare?id=' + img.id)}
+                    className="flex-1 rounded-xl border border-zinc-200 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:hover:border-zinc-600"
+                  >
+                    版本对比
+                  </button>
+                  <button
+                    onClick={() => onRemove(img.id)}
+                    className="rounded-xl border border-zinc-200 px-3 py-1.5 text-sm text-zinc-400 transition-colors hover:bg-rose-50 hover:text-rose-500 hover:border-rose-200 dark:border-zinc-700 dark:hover:bg-rose-500/10 dark:hover:text-rose-400 dark:hover:border-rose-800"
+                  >
+                    移除
+                  </button>
+                </div>
               </div>
             </BentoCard>
           ))}

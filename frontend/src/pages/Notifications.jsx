@@ -65,11 +65,11 @@ export default function Notifications() {
       <div className="bento-grid">
         <BentoCard>
           <div className="text-sm text-zinc-500 dark:text-zinc-400">通知总数</div>
-          <div className="mt-2 text-3xl font-bold text-zinc-900 dark:text-zinc-100">{items.length}</div>
+          <div className="mt-2 text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">{items.length}</div>
         </BentoCard>
         <BentoCard>
           <div className="text-sm text-zinc-500 dark:text-zinc-400">未读</div>
-          <div className="mt-2 text-3xl font-bold text-orange-500">{unread}</div>
+          <div className="mt-2 text-3xl font-bold tracking-tight text-orange-500">{unread}</div>
         </BentoCard>
         <BentoCard span="wide" className="flex items-center justify-between">
           <div>
@@ -87,19 +87,26 @@ export default function Notifications() {
       ) : (
         <div className="space-y-3">
           {items.map((n) => (
-            <BentoCard key={n.id} className={n.read ? 'opacity-70' : ''}>
+            <BentoCard key={n.id} className={n.read ? 'opacity-60' : ''}>
               <div className="flex flex-wrap items-start justify-between gap-3 overflow-hidden">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="text-base font-semibold text-zinc-900 dark:text-zinc-100">{n.reference}</span>
-                    {!n.read && <span className="h-2 w-2 rounded-full bg-orange-500" />}
+                    <span className="truncate text-base font-semibold text-zinc-900 dark:text-zinc-100">{n.reference}</span>
+                    {!n.read && <span className="h-2 w-2 shrink-0 rounded-full bg-orange-500" />}
                   </div>
-                  <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">{n.message}</p>
-                  <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 font-mono text-xs text-zinc-400">
-                    <span>旧：{shortDigest(n.old_digest)}</span>
-                    <span>新：{shortDigest(n.new_digest)}</span>
+                  <p className="mt-1.5 text-sm text-zinc-600 dark:text-zinc-300">{n.message}</p>
+                  <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800/50">
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <span className="text-zinc-400">旧</span>
+                      <span className="font-mono text-zinc-500 dark:text-zinc-400">{shortDigest(n.old_digest)}</span>
+                    </div>
+                    <span className="text-zinc-300 dark:text-zinc-600">→</span>
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <span className="text-zinc-400">新</span>
+                      <span className="font-mono text-zinc-500 dark:text-zinc-400">{shortDigest(n.new_digest)}</span>
+                    </div>
                   </div>
-                  <div className="mt-1 text-xs text-zinc-400">{fmtTime(n.created_at)}</div>
+                  <div className="mt-2 text-xs text-zinc-400">{fmtTime(n.created_at)}</div>
                 </div>
                 {!n.read && (
                   <button

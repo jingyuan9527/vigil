@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
+import BentoCard from '../components/BentoCard'
 import Spinner from '../components/Spinner'
 
 function Toggle({ checked, onChange }) {
@@ -67,82 +68,84 @@ export default function Settings() {
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">在页面上调整运行参数，保存后立即生效并持久化（重启后仍保留）。</p>
       </div>
 
-      <form onSubmit={onSave} className="space-y-5">
-        {/* 扫描间隔 */}
-        <section className="rounded-2xl border border-zinc-100 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="font-medium text-zinc-900 dark:text-zinc-100">扫描间隔（秒）</div>
-              <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-                周期扫描的间隔；设为 0 可关闭自动扫描（仍可用「立即扫描」手动触发）。最小 {30} 秒。
+      <form onSubmit={onSave} className="space-y-4">
+        <div className="bento-grid">
+          {/* 扫描间隔 */}
+          <BentoCard span="wide">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="font-medium text-zinc-900 dark:text-zinc-100">扫描间隔（秒）</div>
+                <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+                  周期扫描的间隔；设为 0 可关闭自动扫描（仍可用「立即扫描」手动触发）。最小 {30} 秒。
+                </div>
               </div>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={form.scan_interval}
+                onChange={(e) => update({ scan_interval: parseInt(e.target.value, 10) || 0 })}
+                className="w-32 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-right text-sm text-zinc-900 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+              />
+            </div>
+          </BentoCard>
+
+          {/* 关闭内置演示监控列表 */}
+          <BentoCard>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="font-medium text-zinc-900 dark:text-zinc-100">演示监控列表</div>
+                <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+                  关闭内置 nginx/redis/postgres 等演示镜像
+                </div>
+              </div>
+              <Toggle checked={form.disable_default_watch} onChange={(v) => update({ disable_default_watch: v })} />
+            </div>
+          </BentoCard>
+
+          {/* 允许 http 注册表 */}
+          <BentoCard>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="font-medium text-zinc-900 dark:text-zinc-100">HTTP 注册表</div>
+                <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+                  允许向 http 私有注册表发起请求
+                </div>
+              </div>
+              <Toggle checked={form.registry_insecure} onChange={(v) => update({ registry_insecure: v })} />
+            </div>
+          </BentoCard>
+
+          {/* 注册表镜像 */}
+          <BentoCard span="wide">
+            <div className="font-medium text-zinc-900 dark:text-zinc-100">注册表镜像主机</div>
+            <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+              非空时所有请求改发往该主机（用于私有仓库或加速镜像）。留空不使用镜像。
             </div>
             <input
-              type="number"
-              min="0"
-              step="1"
-              value={form.scan_interval}
-              onChange={(e) => update({ scan_interval: parseInt(e.target.value, 10) || 0 })}
-              className="w-32 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-right text-sm text-zinc-900 outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+              type="text"
+              placeholder="如 mirror.example.com 或 localhost:5000"
+              value={form.registry_mirror}
+              onChange={(e) => update({ registry_mirror: e.target.value })}
+              className="mt-3 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
             />
-          </div>
-        </section>
+          </BentoCard>
 
-        {/* 关闭内置演示监控列表 */}
-        <section className="rounded-2xl border border-zinc-100 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="font-medium text-zinc-900 dark:text-zinc-100">关闭内置演示监控列表</div>
-              <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-                开启后将不再自动监控 nginx / redis / postgres 等内置演示镜像（手动添加的监控不受影响）。
-              </div>
+          {/* 钉钉通知 Webhook */}
+          <BentoCard span="wide">
+            <div className="font-medium text-zinc-900 dark:text-zinc-100">钉钉通知 Webhook</div>
+            <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+              镜像更新时自动发送钉钉通知。留空不启用。
             </div>
-            <Toggle checked={form.disable_default_watch} onChange={(v) => update({ disable_default_watch: v })} />
-          </div>
-        </section>
-
-        {/* 允许 http 注册表 */}
-        <section className="rounded-2xl border border-zinc-100 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="font-medium text-zinc-900 dark:text-zinc-100">允许 http 注册表</div>
-              <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-                开启后允许向使用 http（非 https）的私有注册表发起请求。
-              </div>
-            </div>
-            <Toggle checked={form.registry_insecure} onChange={(v) => update({ registry_insecure: v })} />
-          </div>
-        </section>
-
-        {/* 注册表镜像 */}
-        <section className="rounded-2xl border border-zinc-100 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-          <div className="font-medium text-zinc-900 dark:text-zinc-100">注册表镜像主机</div>
-          <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-            非空时所有 manifest/tag 请求改发往该主机（用于私有仓库或加速镜像）。留空表示不使用镜像。
-          </div>
-          <input
-            type="text"
-            placeholder="如 mirror.example.com 或 localhost:5000"
-            value={form.registry_mirror}
-            onChange={(e) => update({ registry_mirror: e.target.value })}
-            className="mt-3 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-          />
-        </section>
-
-        {/* 钉钉通知 Webhook */}
-        <section className="rounded-2xl border border-zinc-100 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-          <div className="font-medium text-zinc-900 dark:text-zinc-100">钉钉通知 Webhook</div>
-          <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-            镜像更新时自动发送钉钉通知。留空表示不启用。可在钉钉群机器人设置中获取 Webhook 地址。
-          </div>
-          <input
-            type="text"
-            placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx"
-            value={form.dingtalk_webhook}
-            onChange={(e) => update({ dingtalk_webhook: e.target.value })}
-            className="mt-3 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-          />
-        </section>
+            <input
+              type="text"
+              placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx"
+              value={form.dingtalk_webhook}
+              onChange={(e) => update({ dingtalk_webhook: e.target.value })}
+              className="mt-3 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+            />
+          </BentoCard>
+        </div>
 
         {msg && (
           <div
