@@ -81,6 +81,11 @@ func migrate(db *sql.DB) error {
 		key   TEXT PRIMARY KEY,
 		value TEXT
 	);
+	CREATE TABLE IF NOT EXISTS auth_users (
+		username      TEXT PRIMARY KEY,
+		password_hash TEXT NOT NULL,
+		created_at    TEXT NOT NULL
+	);
 	CREATE INDEX IF NOT EXISTS idx_img_ref ON images(reference);
 	CREATE INDEX IF NOT EXISTS idx_ver_img ON image_versions(image_id);
 	CREATE INDEX IF NOT EXISTS idx_notif_read ON notifications(read);
@@ -424,6 +429,45 @@ func timeOrNil(t *time.Time) interface{} {
 		return nil
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+// ---- Auth ----
+
+// HasAdmin 检查是否已设置管理员账号。
+func (s *Store) HasAdmin() bool {
+	var n int
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM auth_users").Scan(&n)
+	return n > 0
+}
+
+// GetAdmin 获取管理员用户名与密码哈希；未设置时返回空字符串。
+func (s *Store) GetAdmin() (username, hash string) {
+	_ = s.db.QueryRow("SELECT username, password_hash FROM auth_users LIMIT 1").Scan(&username, &hash)
+	return
+}
+
+// SetAdmin 创建或更新管理员账号。
+func (s *Store) SetAdmin(username, hash string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO auth_users (username, password_hash, created_at) VALUES (?, ?, ?)
+		 ON CONFLICT(username) DO UPDATE SET password_hash=excluded.password_hash`,
+		username, hash, nowStr())
+	return err
+}
+
+// GetJWTSecret 从 settings 表读取 JWT 密钥；不存在时返回空。
+func (s *Store) GetJWTSecret() string {
+	var v string
+	_ = s.db.QueryRow("SELECT value FROM settings WHERE key='jwt_secret'").Scan(&v)
+	return v
+}
+
+// SaveJWTSecret 保存 JWT 密钥到 settings 表。
+func (s *Store) SaveJWTSecret(secret string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO settings (key, value) VALUES ('jwt_secret', ?)
+		 ON CONFLICT(key) DO UPDATE SET value=excluded.value`, secret)
+	return err
 }
 
 // ---- Settings ----

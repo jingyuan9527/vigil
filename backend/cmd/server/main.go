@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"dockmon/internal/api"
+	"dockmon/internal/auth"
 	"dockmon/internal/config"
 	"dockmon/internal/docker"
 	"dockmon/internal/registry"
@@ -25,6 +27,27 @@ func main() {
 		log.Fatalf("open store: %v", err)
 	}
 
+	// JWT 密钥：优先使用环境变量，否则从数据库加载或自动生成。
+	var jwtSecret []byte
+	if cfg.JWTSecret != "" {
+		jwtSecret = []byte(cfg.JWTSecret)
+	} else if dbSecret := st.GetJWTSecret(); dbSecret != "" {
+		jwtSecret = []byte(dbSecret)
+	} else {
+		jwtSecret = auth.GenerateSecret()
+		_ = st.SaveJWTSecret(string(jwtSecret))
+	}
+
+	// 若环境变量设置了管理员账号且数据库中尚无管理员，自动创建。
+	if cfg.AdminUser != "" && cfg.AdminPassword != "" && !st.HasAdmin() {
+		hash := auth.HashPassword(cfg.AdminPassword)
+		if err := st.SetAdmin(cfg.AdminUser, hash); err != nil {
+			log.Printf("auto-create admin failed: %v", err)
+		} else {
+			log.Printf("admin account created from env vars (user=%q)", cfg.AdminUser)
+		}
+	}
+
 	var dcli *docker.Client
 	if c, err := docker.NewClient(cfg.DockerHost); err == nil {
 		dcli = c
@@ -34,7 +57,7 @@ func main() {
 	}
 
 	// 运行时可变配置：以环境变量为初值，并以数据库中持久化的设置覆盖（页面可改）。
-	live := config.NewLiveSettings(int(cfg.ScanInterval.Seconds()), cfg.RegistryInsecure, cfg.RegistryMirror, cfg.DisableDefault)
+	live := config.NewLiveSettings(int(cfg.ScanInterval.Seconds()), cfg.RegistryInsecure, cfg.RegistryMirror, cfg.DisableDefault, strings.TrimSpace(cfg.DingTalkWebhook))
 	if m, err := st.LoadSettingsMap(); err == nil && len(m) > 0 {
 		live.Apply(config.SettingsFromMap(m))
 	}
@@ -66,7 +89,7 @@ func main() {
 		}
 	}()
 
-	router := api.NewRouter(cfg.StaticDir, st, sc, reg, live)
+	router := api.NewRouter(cfg.StaticDir, st, sc, reg, live, jwtSecret)
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: router,

@@ -15,10 +15,15 @@ body,
   height: 100%;
 }
 
+html {
+  overflow-x: hidden;
+}
+
 body {
   @apply bg-bento-secondary text-zinc-900 antialiased;
   @apply dark:bg-zinc-900 dark:text-zinc-100;
   font-feature-settings: 'cv11', 'ss01';
+  overflow-x: hidden;
 }
 
 /* ---------- Bento Grid 设计令牌（源自 stylekit.top/bento-grid） ---------- */

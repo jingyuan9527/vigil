@@ -86,7 +86,7 @@ export default function Images() {
 
       {err && <div className="rounded-xl bg-rose-50 px-4 py-2 text-sm text-rose-600 dark:bg-rose-500/10 dark:text-rose-300">{err}</div>}
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 overflow-hidden">
         {FILTERS.map((f) => (
           <button
             key={f.key}

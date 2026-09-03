@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"dockmon/internal/auth"
 	"dockmon/internal/config"
 	"dockmon/internal/models"
 	"dockmon/internal/registry"
@@ -24,12 +25,20 @@ type api struct {
 	reg       *registry.Client
 	staticDir string
 	settings  *config.LiveSettings
+	jwtSecret []byte
 }
 
 // NewRouter 构造 HTTP 处理器：/api 走接口，其余路径回退到前端静态资源（SPA）。
-func NewRouter(staticDir string, st *store.Store, sc *scanner.Scanner, reg *registry.Client, settings *config.LiveSettings) http.Handler {
-	a := &api{store: st, scanner: sc, reg: reg, staticDir: staticDir, settings: settings}
+func NewRouter(staticDir string, st *store.Store, sc *scanner.Scanner, reg *registry.Client, settings *config.LiveSettings, jwtSecret []byte) http.Handler {
+	a := &api{store: st, scanner: sc, reg: reg, staticDir: staticDir, settings: settings, jwtSecret: jwtSecret}
 	mux := http.NewServeMux()
+
+	// 认证相关（无需 token）
+	mux.HandleFunc("/api/auth/check", a.authCheck)
+	mux.HandleFunc("/api/auth/setup", a.authSetup)
+	mux.HandleFunc("/api/auth/login", a.authLogin)
+
+	// 受保护的 API
 	mux.HandleFunc("/api/health", a.health)
 	mux.HandleFunc("/api/stats", a.stats)
 	mux.HandleFunc("/api/images", a.handleImages)
@@ -40,7 +49,9 @@ func NewRouter(staticDir string, st *store.Store, sc *scanner.Scanner, reg *regi
 	mux.HandleFunc("/api/notifications", a.notifications)
 	mux.HandleFunc("/api/notifications/read-all", a.notificationsReadAll)
 	mux.HandleFunc("/api/notifications/", a.notificationByID)
-	return a.withStatic(mux)
+
+	// 认证中间件包裹 API 路由，静态资源不受影响
+	return a.withAuth(a.withStatic(mux))
 }
 
 func (a *api) withStatic(next http.Handler) http.Handler {
@@ -51,6 +62,11 @@ func (a *api) withStatic(next http.Handler) http.Handler {
 		}
 		a.serveStatic(w, r)
 	})
+}
+
+// withAuth 对 /api/* 路径施加 JWT 认证（/api/auth/* 和 /api/health 除外）。
+func (a *api) withAuth(next http.Handler) http.Handler {
+	return auth.Middleware(next, a.jwtSecret)
 }
 
 func (a *api) serveStatic(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +114,86 @@ func (a *api) health(w http.ResponseWriter, r *http.Request) {
 		"version": "1.0.0",
 		"time":    time.Now().UTC(),
 	})
+}
+
+// ---- Auth handlers ----
+
+// authCheck 返回是否需要初始化设置。
+func (a *api) authCheck(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"setup_required": !a.store.HasAdmin(),
+	})
+}
+
+// authSetup 首次部署时设置管理员账号（仅在无管理员时可用）。
+func (a *api) authSetup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	if a.store.HasAdmin() {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "管理员已设置，请使用登录接口"})
+		return
+	}
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	body.Username = strings.TrimSpace(body.Username)
+	if body.Username == "" || body.Password == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "用户名和密码不能为空"})
+		return
+	}
+	if len(body.Password) < 6 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "密码长度至少 6 位"})
+		return
+	}
+	hash := auth.HashPassword(body.Password)
+	if err := a.store.SetAdmin(body.Username, hash); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	token, err := auth.GenerateToken(body.Username, a.jwtSecret, 72*time.Hour)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "生成 token 失败"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+}
+
+// authLogin 用户登录。
+func (a *api) authLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	if !a.store.HasAdmin() {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请先完成初始设置"})
+		return
+	}
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	storedUser, storedHash := a.store.GetAdmin()
+	if body.Username != storedUser || !auth.CheckPassword(storedHash, body.Password) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "用户名或密码错误"})
+		return
+	}
+	token, err := auth.GenerateToken(body.Username, a.jwtSecret, 72*time.Hour)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "生成 token 失败"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
 
 func (a *api) stats(w http.ResponseWriter, r *http.Request) {

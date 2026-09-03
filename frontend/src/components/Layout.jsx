@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { api, fmtTime } from '../api/client'
 import { useTheme } from '../context/ThemeContext'
+import { useAuth } from '../context/AuthContext'
 
 const nav = [
   { to: '/', label: '仪表盘', icon: GridIcon, end: true },
@@ -13,6 +14,7 @@ const nav = [
 
 export default function Layout() {
   const { theme, toggle } = useTheme()
+  const { logout } = useAuth()
   const navigate = useNavigate()
   const [unread, setUnread] = useState(0)
   const [scanning, setScanning] = useState(false)
@@ -45,9 +47,9 @@ export default function Layout() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col lg:flex-row">
+    <div className="flex min-h-screen flex-col overflow-hidden lg:flex-row">
       {/* Sidebar */}
-      <aside className="flex shrink-0 flex-row gap-1 overflow-x-auto border-b border-zinc-100 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900 lg:w-64 lg:flex-col lg:gap-2 lg:border-b-0 lg:border-r lg:px-5 lg:py-7">
+      <aside className="flex shrink-0 flex-row gap-1 overflow-hidden border-b border-zinc-100 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900 lg:w-64 lg:flex-col lg:gap-2 lg:border-b-0 lg:border-r lg:px-5 lg:py-7">
         <div className="mb-2 hidden items-center gap-2.5 lg:flex">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 text-white shadow-bento">
             <ShipIcon />
@@ -90,10 +92,17 @@ export default function Layout() {
           {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
           {theme === 'dark' ? '浅色模式' : '深色模式'}
         </button>
+        <button
+          onClick={logout}
+          className="hidden items-center gap-2 rounded-xl px-3 py-2.5 text-sm text-zinc-500 transition-colors hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800 lg:flex"
+        >
+          <LogoutIcon />
+          退出登录
+        </button>
       </aside>
 
       {/* Main */}
-      <main className="flex-1 px-4 py-6 md:px-6 lg:px-8 lg:py-8">
+      <main className="flex-1 overflow-hidden px-4 py-6 md:px-6 lg:px-8 lg:py-8">
         <div className="mx-auto max-w-6xl">
           <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
             <div className="text-xs text-zinc-400 dark:text-zinc-500">
@@ -199,6 +208,15 @@ function GearIcon() {
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+    </svg>
+  )
+}
+function LogoutIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <polyline points="16 17 21 12 16 7" />
+      <line x1="21" y1="12" x2="9" y2="12" />
     </svg>
   )
 }

@@ -88,7 +88,7 @@ export default function Notifications() {
         <div className="space-y-3">
           {items.map((n) => (
             <BentoCard key={n.id} className={n.read ? 'opacity-70' : ''}>
-              <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex flex-wrap items-start justify-between gap-3 overflow-hidden">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="text-base font-semibold text-zinc-900 dark:text-zinc-100">{n.reference}</span>

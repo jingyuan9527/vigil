@@ -9,6 +9,13 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - dockmon-data:/data
+    environment:
+      - PORT=54321
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      # - ADMIN_USER=admin
+      # - ADMIN_PASSWORD=your_password
+      # - JWT_SECRET=your-secret-key
+      # - DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=xxx
     restart: unless-stopped
 
 volumes:

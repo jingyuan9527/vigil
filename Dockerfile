@@ -28,7 +28,8 @@ ENV PORT=54321 \
     STATIC_DIR=/app/static \
     DB_PATH=/data/monitor.db \
     DOCKER_HOST=unix:///var/run/docker.sock \
-    REGISTRY_MIRROR=
+    REGISTRY_MIRROR= \
+    DINGTALK_WEBHOOK=
 
 EXPOSE 54321
 VOLUME ["/data"]

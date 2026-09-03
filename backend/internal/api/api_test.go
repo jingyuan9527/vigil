@@ -22,8 +22,8 @@ func TestAPIRouter(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	// docker 传 nil（无守护进程），registry 客户端不会被调用（扫描无任务）。
-	sc := scanner.New(&config.Config{DisableDefault: true}, st, nil, registry.NewClient(false), config.NewLiveSettings(3600, false, "", true))
-	router := NewRouter("./static", st, sc, registry.NewClient(false), config.NewLiveSettings(3600, false, "", true))
+	sc := scanner.New(&config.Config{DisableDefault: true}, st, nil, registry.NewClient(false), config.NewLiveSettings(3600, false, "", true, ""))
+	router := NewRouter("./static", st, sc, registry.NewClient(false), config.NewLiveSettings(3600, false, "", true, ""), []byte("test-secret"))
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 

@@ -19,6 +19,10 @@ type Config struct {
 	RegistryInsecure bool
 	RegistryMirror   string
 	DisableDefault   bool
+	AdminUser        string
+	AdminPassword    string
+	JWTSecret        string
+	DingTalkWebhook  string
 }
 
 func getEnv(key, def string) string {
@@ -55,6 +59,10 @@ func Load() *Config {
 		RegistryInsecure: getEnvBool("REGISTRY_INSECURE", false),
 		RegistryMirror:   getEnv("REGISTRY_MIRROR", ""),
 		DisableDefault:   getEnvBool("DISABLE_DEFAULT_WATCH", false),
+		AdminUser:        getEnv("ADMIN_USER", ""),
+		AdminPassword:    getEnv("ADMIN_PASSWORD", ""),
+		JWTSecret:        getEnv("JWT_SECRET", ""),
+		DingTalkWebhook:  getEnv("DINGTALK_WEBHOOK", ""),
 	}
 	if w := getEnv("WATCH", ""); w != "" {
 		for _, p := range strings.Split(w, ",") {

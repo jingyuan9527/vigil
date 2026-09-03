@@ -13,6 +13,7 @@ type Settings struct {
 	RegistryInsecure    bool   `json:"registry_insecure"`      // 是否允许 http 注册表
 	RegistryMirror      string `json:"registry_mirror"`        // 注册表镜像主机（非空时覆盖请求主机）
 	DisableDefaultWatch bool   `json:"disable_default_watch"`  // 关闭内置演示监控列表
+	DingTalkWebhook     string `json:"dingtalk_webhook"`       // 钉钉通知 Webhook URL
 }
 
 // ScanMinSeconds 是 scan_interval 在启用状态下允许的最小值，避免过于频繁地打注册表。
@@ -27,15 +28,17 @@ type LiveSettings struct {
 	RegistryInsecure    bool
 	RegistryMirror      string
 	DisableDefaultWatch bool
+	DingTalkWebhook     string
 }
 
 // NewLiveSettings 以环境变量初值构造 LiveSettings。
-func NewLiveSettings(scanSeconds int, insecure bool, mirror string, disableDefault bool) *LiveSettings {
+func NewLiveSettings(scanSeconds int, insecure bool, mirror string, disableDefault bool, dingTalkWebhook string) *LiveSettings {
 	l := &LiveSettings{
 		ScanInterval:        scanSeconds,
 		RegistryInsecure:    insecure,
 		RegistryMirror:      mirror,
 		DisableDefaultWatch: disableDefault,
+		DingTalkWebhook:     dingTalkWebhook,
 	}
 	l.broadcast = make(chan struct{})
 	return l
@@ -50,6 +53,7 @@ func (l *LiveSettings) Snapshot() Settings {
 		RegistryInsecure:    l.RegistryInsecure,
 		RegistryMirror:      l.RegistryMirror,
 		DisableDefaultWatch: l.DisableDefaultWatch,
+		DingTalkWebhook:     l.DingTalkWebhook,
 	}
 }
 
@@ -61,6 +65,7 @@ func (l *LiveSettings) Apply(s Settings) {
 	l.RegistryInsecure = s.RegistryInsecure
 	l.RegistryMirror = s.RegistryMirror
 	l.DisableDefaultWatch = s.DisableDefaultWatch
+	l.DingTalkWebhook = s.DingTalkWebhook
 	old := l.broadcast
 	l.broadcast = make(chan struct{})
 	l.mu.Unlock()
@@ -91,6 +96,7 @@ func SettingsToMap(s Settings) map[string]string {
 		"registry_insecure":     strconv.FormatBool(s.RegistryInsecure),
 		"registry_mirror":       s.RegistryMirror,
 		"disable_default_watch": strconv.FormatBool(s.DisableDefaultWatch),
+		"dingtalk_webhook":      s.DingTalkWebhook,
 	}
 }
 
@@ -110,6 +116,9 @@ func SettingsFromMap(m map[string]string) Settings {
 	}
 	if v, ok := m["disable_default_watch"]; ok {
 		s.DisableDefaultWatch = v == "true" || v == "1"
+	}
+	if v, ok := m["dingtalk_webhook"]; ok {
+		s.DingTalkWebhook = v
 	}
 	return s
 }

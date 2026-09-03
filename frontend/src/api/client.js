@@ -1,7 +1,23 @@
 const API = '/api'
 
+function getToken() {
+  return localStorage.getItem('dockmon_token')
+}
+
+function authHeaders(extra) {
+  const h = { ...extra }
+  const t = getToken()
+  if (t) h['Authorization'] = 'Bearer ' + t
+  return h
+}
+
 async function getJSON(path) {
-  const res = await fetch(API + path)
+  const res = await fetch(API + path, { headers: authHeaders() })
+  if (res.status === 401) {
+    localStorage.removeItem('dockmon_token')
+    window.location.reload()
+    throw new Error('未授权')
+  }
   if (!res.ok) throw new Error('请求失败: ' + res.status)
   return res.json()
 }
@@ -9,20 +25,51 @@ async function getJSON(path) {
 async function postJSON(path, body) {
   const res = await fetch(API + path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: body ? JSON.stringify(body) : undefined,
   })
+  if (res.status === 401) {
+    localStorage.removeItem('dockmon_token')
+    window.location.reload()
+    throw new Error('未授权')
+  }
+  if (!res.ok) throw new Error('请求失败: ' + res.status)
+  return res.json()
+}
+
+async function putJSON(path, body) {
+  const res = await fetch(API + path, {
+    method: 'PUT',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  if (res.status === 401) {
+    localStorage.removeItem('dockmon_token')
+    window.location.reload()
+    throw new Error('未授权')
+  }
   if (!res.ok) throw new Error('请求失败: ' + res.status)
   return res.json()
 }
 
 async function del(path) {
-  const res = await fetch(API + path, { method: 'DELETE' })
+  const res = await fetch(API + path, { method: 'DELETE', headers: authHeaders() })
+  if (res.status === 401) {
+    localStorage.removeItem('dockmon_token')
+    window.location.reload()
+    throw new Error('未授权')
+  }
   if (!res.ok) throw new Error('请求失败: ' + res.status)
   return res.json()
 }
 
 export const api = {
+  // Auth（不需要 token）
+  authCheck: () => getJSON('/auth/check'),
+  authSetup: (username, password) => postJSON('/auth/setup', { username, password }),
+  authLogin: (username, password) => postJSON('/auth/login', { username, password }),
+
+  // Protected APIs
   health: () => getJSON('/health'),
   stats: () => getJSON('/stats'),
   images: (status) => getJSON('/images' + (status ? `?status=${status}` : '')),

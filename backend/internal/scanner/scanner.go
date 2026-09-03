@@ -3,12 +3,14 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
 	"dockmon/internal/config"
 	"dockmon/internal/docker"
 	"dockmon/internal/models"
+	"dockmon/internal/notification"
 	"dockmon/internal/registry"
 	"dockmon/internal/store"
 )
@@ -152,6 +154,16 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 			NewTag:     ref.Tag,
 			Message:    msg,
 		})
+
+		// 钉钉通知
+		if webhook := s.settings.Snapshot().DingTalkWebhook; webhook != "" {
+			go func() {
+				if err := notification.NotifyUpdate(webhook, j.reference, prevRemote, remote); err != nil {
+					log.Printf("dingtalk notify failed for %s: %v", j.reference, err)
+				}
+			}()
+		}
+
 		return true, nil
 	}
 	return false, nil

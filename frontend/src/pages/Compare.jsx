@@ -45,9 +45,9 @@ export default function Compare() {
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">对比本地与远端镜像摘要，查看版本时间线与可用标签。</p>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
+      <div className="grid gap-6 overflow-hidden lg:grid-cols-[260px_1fr]">
         {/* 选择器 */}
-        <div className="space-y-2">
+        <div className="min-w-0 space-y-2">
           {loading ? (
             <Spinner />
           ) : (

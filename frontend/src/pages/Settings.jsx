@@ -129,6 +129,21 @@ export default function Settings() {
           />
         </section>
 
+        {/* 钉钉通知 Webhook */}
+        <section className="rounded-2xl border border-zinc-100 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="font-medium text-zinc-900 dark:text-zinc-100">钉钉通知 Webhook</div>
+          <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+            镜像更新时自动发送钉钉通知。留空表示不启用。可在钉钉群机器人设置中获取 Webhook 地址。
+          </div>
+          <input
+            type="text"
+            placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx"
+            value={form.dingtalk_webhook}
+            onChange={(e) => update({ dingtalk_webhook: e.target.value })}
+            className="mt-3 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+          />
+        </section>
+
         {msg && (
           <div
             className={`rounded-xl px-4 py-2 text-sm ${
