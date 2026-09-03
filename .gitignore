@@ -10,3 +10,4 @@ dockmon
 .env
 .DS_Store
 .workbuddy/
+.idea/
