@@ -65,18 +65,18 @@ export default function Images() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 overflow-hidden">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 md:text-3xl">镜像列表</h1>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">所有被监控的镜像引用及其版本状态。</p>
         </div>
-        <form onSubmit={onAdd} className="flex items-center gap-2">
+        <form onSubmit={onAdd} className="flex min-w-0 items-center gap-2">
           <input
             value={newRef}
             onChange={(e) => setNewRef(e.target.value)}
             placeholder="新增监控，如 redis:7"
-            className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm outline-none transition-all focus:border-bento-accent focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+            className="min-w-0 flex-1 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm outline-none transition-all focus:border-bento-accent focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
           />
           <button disabled={adding} className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-60 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200">
             {adding ? '添加中…' : '添加'}
@@ -104,7 +104,7 @@ export default function Images() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="搜索引用…"
-          className="ml-auto w-44 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-sm outline-none transition-all focus:border-bento-accent focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+          className="ml-auto w-full max-w-[11rem] rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-sm outline-none transition-all focus:border-bento-accent focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
         />
       </div>
 
