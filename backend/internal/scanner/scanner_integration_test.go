@@ -83,7 +83,7 @@ func TestScannerFullPipeline(t *testing.T) {
 		DefaultWatch:   []string{"nginx:latest"},
 		DisableDefault: false,
 	}
-	sc := New(cfg, st, dcli, reg)
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false))
 
 	// ---- 5) 第一次扫描：本地 == 远端，应为 up-to-date，不产生误报告知 ----
 	sc.Run(context.Background())

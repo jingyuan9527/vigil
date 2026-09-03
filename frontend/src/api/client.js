@@ -30,6 +30,8 @@ export const api = {
   scans: () => getJSON('/scans'),
   notifications: (unread) => getJSON('/notifications' + (unread ? '?unread=1' : '')),
   scanNow: () => postJSON('/scan'),
+  settings: () => getJSON('/settings'),
+  saveSettings: (s) => putJSON('/settings', s),
   addImage: (reference) => postJSON('/images', { reference }),
   removeImage: (id) => del('/images/' + id),
   markRead: (id) => postJSON('/notifications/' + id + '/read'),

@@ -15,15 +15,19 @@ import (
 
 // Scanner 负责采集镜像、检测远端版本变化并生成通知。
 type Scanner struct {
-	cfg    *config.Config
-	store  *store.Store
-	docker *docker.Client
-	reg    *registry.Client
+	cfg     *config.Config
+	store   *store.Store
+	docker  *docker.Client
+	reg     *registry.Client
+	settings *config.LiveSettings
 }
 
-func New(cfg *config.Config, st *store.Store, dcli *docker.Client, reg *registry.Client) *Scanner {
-	return &Scanner{cfg: cfg, store: st, docker: dcli, reg: reg}
+func New(cfg *config.Config, st *store.Store, dcli *docker.Client, reg *registry.Client, settings *config.LiveSettings) *Scanner {
+	return &Scanner{cfg: cfg, store: st, docker: dcli, reg: reg, settings: settings}
 }
+
+// SetRegistry 在运行时（页面修改注册表设置后）热替换注册表客户端。
+func (s *Scanner) SetRegistry(reg *registry.Client) { s.reg = reg }
 
 type job struct {
 	reference   string
@@ -68,7 +72,7 @@ func (s *Scanner) collectJobs(ctx context.Context) []job {
 	for _, ref := range s.cfg.Watch {
 		add(ref, "", "manual")
 	}
-	if !s.cfg.DisableDefault {
+	if !s.settings.Snapshot().DisableDefaultWatch {
 		for _, ref := range s.cfg.DefaultWatch {
 			add(ref, "", "manual")
 		}

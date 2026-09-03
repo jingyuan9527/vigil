@@ -33,24 +33,40 @@ func main() {
 		log.Printf("docker client unavailable: %v (continuing with watch list only)", err)
 	}
 
-	reg := registry.NewClientWithMirror(cfg.RegistryInsecure, cfg.RegistryMirror)
-	sc := scanner.New(cfg, st, dcli, reg)
+	// 运行时可变配置：以环境变量为初值，并以数据库中持久化的设置覆盖（页面可改）。
+	live := config.NewLiveSettings(int(cfg.ScanInterval.Seconds()), cfg.RegistryInsecure, cfg.RegistryMirror, cfg.DisableDefault)
+	if m, err := st.LoadSettingsMap(); err == nil && len(m) > 0 {
+		live.Apply(config.SettingsFromMap(m))
+	}
+
+	// 注册表客户端以「生效设置」构造，确保页面修改后重启仍生效。
+	liveSnap := live.Snapshot()
+	reg := registry.NewClientWithMirror(liveSnap.RegistryInsecure, liveSnap.RegistryMirror)
+	sc := scanner.New(cfg, st, dcli, reg, live)
 
 	// 启动时立即扫描一次
 	go sc.Run(context.Background())
 
-	// 周期扫描
-	if cfg.ScanInterval > 0 {
-		go func() {
-			ticker := time.NewTicker(cfg.ScanInterval)
-			defer ticker.Stop()
-			for range ticker.C {
-				sc.Run(context.Background())
+	// 周期扫描：间隔可由页面动态调整，变化时自动重新计时。
+	go func() {
+		for {
+			d := live.ScanIntervalDuration()
+			if d <= 0 {
+				<-live.Changed() // 周期扫描已禁用，等待重新启用
+				continue
 			}
-		}()
-	}
+			tm := time.NewTimer(d)
+			ch := live.Changed()
+			select {
+			case <-tm.C:
+				sc.Run(context.Background())
+			case <-ch:
+				tm.Stop()
+			}
+		}
+	}()
 
-	router := api.NewRouter(cfg.StaticDir, st, sc, reg)
+	router := api.NewRouter(cfg.StaticDir, st, sc, reg, live)
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: router,

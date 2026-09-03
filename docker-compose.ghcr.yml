@@ -1,0 +1,15 @@
+# 使用 GitHub 预构建多架构镜像（含 linux/amd64 与 linux/arm64），无需本地编译。
+# 用法：docker compose -f docker-compose.ghcr.yml up -d  然后访问 http://localhost:54321
+# 可选环境变量（扫描间隔、注册表镜像等）见 README，也可在页面「设置」中修改。
+services:
+  dockmon:
+    image: ghcr.io/jingyuan9527/vigil:latest
+    ports:
+      - "54321:54321"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - dockmon-data:/data
+    restart: unless-stopped
+
+volumes:
+  dockmon-data:

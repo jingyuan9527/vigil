@@ -77,6 +77,10 @@ func migrate(db *sql.DB) error {
 		status         TEXT,
 		error          TEXT
 	);
+	CREATE TABLE IF NOT EXISTS settings (
+		key   TEXT PRIMARY KEY,
+		value TEXT
+	);
 	CREATE INDEX IF NOT EXISTS idx_img_ref ON images(reference);
 	CREATE INDEX IF NOT EXISTS idx_ver_img ON image_versions(image_id);
 	CREATE INDEX IF NOT EXISTS idx_notif_read ON notifications(read);
@@ -420,4 +424,37 @@ func timeOrNil(t *time.Time) interface{} {
 		return nil
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+// ---- Settings ----
+
+// LoadSettingsMap 读取全部设置键值对；表为空时返回空 map（非 nil error）。
+func (s *Store) LoadSettingsMap() (map[string]string, error) {
+	rows, err := s.db.Query("SELECT key, value FROM settings")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		m[k] = v
+	}
+	return m, rows.Err()
+}
+
+// SaveSettingsMap 写入（覆盖）全部设置键值对。
+func (s *Store) SaveSettingsMap(m map[string]string) error {
+	for k, v := range m {
+		if _, err := s.db.Exec(
+			`INSERT INTO settings (key, value) VALUES (?, ?)
+			 ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+			k, v); err != nil {
+			return err
+		}
+	}
+	return nil
 }

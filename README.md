@@ -84,6 +84,33 @@ cd frontend && npm install && npm run dev
 # 访问 http://localhost:5173
 ```
 
+### 方式三：使用 GitHub 预构建镜像（GHCR，免本地编译）
+
+适合不想本地构建、或直接在 ARM 设备（树莓派等）上部署的场景。镜像由 GitHub Actions 自动构建并推送至 GHCR，已包含 `linux/amd64` 与 `linux/arm64` 双架构，无需本地 `go` / `node` 工具链。
+
+使用预置的 compose 文件（仅拉取镜像，不构建）：
+
+```bash
+docker compose -f docker-compose.ghcr.yml up -d
+# 访问 http://localhost:54321
+```
+
+或直接用 `docker run` 拉取运行：
+
+```bash
+docker run -d --name dockmon \
+  -p 54321:54321 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v dockmon-data:/data \
+  ghcr.io/jingyuan9527/vigil:latest
+```
+
+如需显式指定架构（通常 docker 会自动匹配宿主架构，无需手动指定）：
+
+```bash
+docker pull --platform linux/arm64 ghcr.io/jingyuan9527/vigil:latest
+```
+
 ---
 
 ## 配置（环境变量）
@@ -100,6 +127,8 @@ cd frontend && npm install && npm run dev
 | `WATCH` | 空 | 额外监控的镜像引用，逗号分隔（如 `nginx:latest,redis:7`） |
 | `DISABLE_DEFAULT_WATCH` | `false` | 设为 `1` 关闭内置演示监控列表 |
 
+> 上述 `SCAN_INTERVAL` / `REGISTRY_INSECURE` / `REGISTRY_MIRROR` / `DISABLE_DEFAULT_WATCH` 四项**也可在页面「设置」中直接修改**，保存后即时生效并持久化到数据库，重启后仍然保留；环境变量仅作为首次启动的初值。
+>
 > 即使没有 Docker 守护进程（如仅监控远端镜像），也可通过 `WATCH` / 页面「添加监控」来监控任意注册表镜像的版本变化。
 
 ---
@@ -115,6 +144,8 @@ cd frontend && npm install && npm run dev
 | GET | `/api/images/:id` | 镜像详情（含版本时间线、可用 tag） |
 | DELETE | `/api/images/:id` | 移除监控 |
 | POST | `/api/scan` | 立即触发一次扫描 |
+| GET | `/api/settings` | 获取当前运行时设置（扫描间隔、注册表、演示列表等） |
+| PUT | `/api/settings` | 更新设置，持久化并即时生效（重启后仍保留） |
 | GET | `/api/scans` | 扫描历史 |
 | GET | `/api/notifications?unread=1` | 通知列表 |
 | POST | `/api/notifications/:id/read` | 标记单条已读 |
@@ -128,6 +159,7 @@ cd frontend && npm install && npm run dev
 - **镜像列表（Images）**：全部被监控镜像卡片，含状态徽标、本地/远端摘要、搜索/过滤、新增/移除。
 - **版本对比（Compare）**：左侧选择镜像，右侧并排展示本地 vs 远端摘要、可用标签与版本时间线。
 - **更新通知（Notifications）**：更新提醒列表，支持未读过滤与单条/全部已读。
+- **设置（Settings）**：在页面上调整扫描间隔、关闭内置演示监控列表、允许 http 注册表、配置注册表镜像主机，保存后即时生效并持久化。
 
 ---
 
@@ -140,7 +172,7 @@ cd frontend && npm install && npm run dev
 | `ghcr.io/jingyuan9527/vigil:latest` | `linux/amd64`, `linux/arm64` |
 | `ghcr.io/jingyuan9527/vigil:<tag>` | 同上述双架构 |
 
-使用预构建镜像（将 compose 中的镜像替换为 GHCR 地址即可）：
+使用预构建镜像（推荐直接使用预置的 [`docker-compose.ghcr.yml`](docker-compose.ghcr.yml)，或按下方 `docker run` 命令）：
 
 ```bash
 docker run -d --name dockmon \

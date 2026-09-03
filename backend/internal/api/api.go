@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"dockmon/internal/config"
 	"dockmon/internal/models"
 	"dockmon/internal/registry"
 	"dockmon/internal/scanner"
@@ -22,11 +23,12 @@ type api struct {
 	scanner   *scanner.Scanner
 	reg       *registry.Client
 	staticDir string
+	settings  *config.LiveSettings
 }
 
 // NewRouter 构造 HTTP 处理器：/api 走接口，其余路径回退到前端静态资源（SPA）。
-func NewRouter(staticDir string, st *store.Store, sc *scanner.Scanner, reg *registry.Client) http.Handler {
-	a := &api{store: st, scanner: sc, reg: reg, staticDir: staticDir}
+func NewRouter(staticDir string, st *store.Store, sc *scanner.Scanner, reg *registry.Client, settings *config.LiveSettings) http.Handler {
+	a := &api{store: st, scanner: sc, reg: reg, staticDir: staticDir, settings: settings}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", a.health)
 	mux.HandleFunc("/api/stats", a.stats)
@@ -34,6 +36,7 @@ func NewRouter(staticDir string, st *store.Store, sc *scanner.Scanner, reg *regi
 	mux.HandleFunc("/api/images/", a.handleImageByID)
 	mux.HandleFunc("/api/scan", a.scan)
 	mux.HandleFunc("/api/scans", a.scans)
+	mux.HandleFunc("/api/settings", a.handleSettings)
 	mux.HandleFunc("/api/notifications", a.notifications)
 	mux.HandleFunc("/api/notifications/read-all", a.notificationsReadAll)
 	mux.HandleFunc("/api/notifications/", a.notificationByID)
@@ -192,6 +195,50 @@ func (a *api) scan(w http.ResponseWriter, r *http.Request) {
 	}
 	go a.scanner.Run(context.Background())
 	writeJSON(w, http.StatusAccepted, map[string]string{"result": "scan started"})
+}
+
+// handleSettings 提供运行时设置的读取与持久化更新。
+// GET 返回当前设置；PUT 整体覆盖并落库，注册表相关字段变化时热重建注册表客户端。
+func (a *api) handleSettings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, a.settings.Snapshot())
+	case http.MethodPut:
+		var body config.Settings
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+			return
+		}
+		if body.ScanInterval < 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scan_interval 不能为负"})
+			return
+		}
+		// 启用状态下设置最小间隔，避免误配导致频繁请求注册表
+		if body.ScanInterval > 0 && body.ScanInterval < config.ScanMinSeconds {
+			body.ScanInterval = config.ScanMinSeconds
+		}
+		body.RegistryMirror = strings.TrimSpace(body.RegistryMirror)
+
+		prev := a.settings.Snapshot()
+		a.settings.Apply(body)
+		next := a.settings.Snapshot()
+
+		if err := a.store.SaveSettingsMap(config.SettingsToMap(next)); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		// 注册表相关字段变更：热重建客户端并同步 scanner 与接口自身
+		if prev.RegistryInsecure != next.RegistryInsecure || prev.RegistryMirror != next.RegistryMirror {
+			newReg := registry.NewClientWithMirror(next.RegistryInsecure, next.RegistryMirror)
+			a.reg = newReg
+			a.scanner.SetRegistry(newReg)
+		}
+
+		writeJSON(w, http.StatusOK, next)
+	default:
+		methodNotAllowed(w)
+	}
 }
 
 func (a *api) scans(w http.ResponseWriter, r *http.Request) {
