@@ -1,0 +1,12 @@
+node_modules/
+dist/
+bin/
+dockmon
+*.exe
+*.log
+*.db
+*.db-wal
+*.db-shm
+.env
+.DS_Store
+.workbuddy/

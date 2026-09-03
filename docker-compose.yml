@@ -1,0 +1,30 @@
+services:
+  dockmon:
+    build: .
+    image: dockmon:latest
+    container_name: dockmon
+    ports:
+      - "54321:54321"
+    volumes:
+      # 挂载宿主 Docker socket 以采集本地镜像
+      - /var/run/docker.sock:/var/run/docker.sock
+      # 持久化 SQLite 数据库
+      - dockmon-data:/data
+    environment:
+      - PORT=54321
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - SCAN_INTERVAL=3600          # 周期扫描间隔（秒）
+      - REGISTRY_INSECURE=false     # 是否允许 http 注册表
+      # - REGISTRY_MIRROR=https://your-mirror.example.com  # 私有/加速镜像（非空时覆盖注册表主机）
+      # - WATCH=nginx:latest,redis:7,postgres:16   # 额外监控（无本地镜像也可监控远端）
+      # - DISABLE_DEFAULT_WATCH=false               # 设为 1 关闭内置演示监控列表
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:54321/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  dockmon-data:

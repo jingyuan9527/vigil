@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bento-grid-primary: #18181b;
+  --bento-grid-secondary: #fafafa;
+  --bento-grid-accent: #3b82f6;
+  --bento-grid-glow: rgba(24, 24, 27, 0.3);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bento-secondary text-zinc-900 antialiased;
+  @apply dark:bg-zinc-900 dark:text-zinc-100;
+  font-feature-settings: 'cv11', 'ss01';
+}
+
+/* ---------- Bento Grid 设计令牌（源自 stylekit.top/bento-grid） ---------- */
+.bento-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+}
+@media (max-width: 1024px) {
+  .bento-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .bento-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.bento-lg {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+.bento-wide {
+  grid-column: span 2;
+}
+.bento-tall {
+  grid-row: span 2;
+}
+@media (max-width: 1024px) {
+  .bento-lg,
+  .bento-wide,
+  .bento-tall {
+    grid-column: auto;
+    grid-row: auto;
+  }
+}
+
+.bento-card {
+  @apply rounded-2xl border border-zinc-100 bg-white shadow-sm transition-all duration-200 ease-out;
+  @apply dark:border-zinc-800 dark:bg-zinc-900;
+}
+.bento-card:hover {
+  transform: translateY(-4px) scale(1.01);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+}
+.dark .bento-card:hover {
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+}
+
+.bento-icon {
+  transition: transform 0.2s ease-out, color 0.2s ease-out;
+}
+.group:hover .bento-icon {
+  transform: scale(1.1);
+}
+
+/* 减弱动效偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .bento-card,
+  .bento-icon {
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
+/* 滚动条细化 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-zinc-300 dark:bg-zinc-700;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
