@@ -71,6 +71,12 @@ func migrate(db *sql.DB) error {
 		read        INTEGER NOT NULL DEFAULT 0,
 		created_at  TEXT NOT NULL
 	);
+	CREATE TABLE IF NOT EXISTS image_digest_notified (
+		image_id    INTEGER NOT NULL,
+		digest      TEXT NOT NULL,
+		notified_at TEXT NOT NULL,
+		PRIMARY KEY (image_id, digest)
+	);
 	CREATE TABLE IF NOT EXISTS scans (
 		id             INTEGER PRIMARY KEY AUTOINCREMENT,
 		started_at     TEXT NOT NULL,
@@ -109,6 +115,12 @@ func migrate(db *sql.DB) error {
 	_ = addColumnIfMissing(db, "images", "ignored", "INTEGER NOT NULL DEFAULT 0")
 	_ = addColumnIfMissing(db, "images", "mode", "TEXT NOT NULL DEFAULT 'auto'")
 	_ = addColumnIfMissing(db, "notifications", "type", "TEXT NOT NULL DEFAULT 'update'")
+	// 去重基线回填：存量 update 通知导入独立去重表（(image_id,digest) 主键 + OR IGNORE 幂等），
+	// 保证清理历史后常规扫描不会对已通知过的 digest 重复告警。
+	_, _ = db.Exec(
+		`INSERT OR IGNORE INTO image_digest_notified (image_id, digest, notified_at)
+		 SELECT image_id, new_digest, created_at FROM notifications
+		 WHERE type='update' AND new_digest != ''`)
 	return nil
 }
 
@@ -292,17 +304,78 @@ func (s *Store) AddSeenTags(imageID int64, tags []string) error {
 
 // ---- Notifications ----
 
-// HasDigestNotification 报告某镜像是否已对指定远端摘要发过 type=update 的通知，
-// 用于「同一个 digest 只通知一次」的去重（常规转移通知与强制扫描补发共用此闸门）。
+// MaxRetainedReadNotifs 已读通知自动保留上限：超过此数的最老已读记录在扫描后被清理，
+// 未读通知永不自动删除（避免丢失提醒信息）。
+const MaxRetainedReadNotifs = 500
+
+// HasDigestNotification 报告某镜像是否已对指定远端摘要发过 type=update 的通知。
+// 去重基线独立存于 image_digest_notified 表（与历史通知记录解耦），
+// 因此清理/清空已读通知后，常规扫描仍不会对同一 digest 重复告警。
 func (s *Store) HasDigestNotification(imageID int64, digest string) (bool, error) {
 	var n int
 	err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM notifications WHERE image_id=? AND type='update' AND new_digest=?`,
+		`SELECT COUNT(*) FROM image_digest_notified WHERE image_id=? AND digest=?`,
 		imageID, digest).Scan(&n)
 	if err != nil {
 		return false, err
 	}
 	return n > 0, nil
+}
+
+// CreateNotification 写入通知；type=update 的通知在同一事务内登记去重基线
+// （保持「创建 update 通知 == 已通知该 digest」的不变式）。
+func (s *Store) CreateNotification(n *models.Notification) error {
+	typ := n.Type
+	if typ == "" {
+		typ = models.NotifUpdate
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(
+		`INSERT INTO notifications (image_id,image_name,reference,old_digest,new_digest,old_tag,new_tag,type,message,read,created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,0,?)`,
+		n.ImageID, n.ImageName, n.Reference, n.OldDigest, n.NewDigest,
+		n.OldTag, n.NewTag, string(typ), n.Message, nowStr()); err != nil {
+		return err
+	}
+	if typ == models.NotifUpdate && n.NewDigest != "" {
+		if _, err := tx.Exec(
+			`INSERT OR IGNORE INTO image_digest_notified (image_id,digest,notified_at) VALUES (?,?,?)`,
+			n.ImageID, n.NewDigest, nowStr()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// TrimReadNotifications 自动保留策略：只保留最近 keep 条已读通知，更老的删除；
+// 未读通知不受影响。返回删除条数。
+func (s *Store) TrimReadNotifications(keep int) (int64, error) {
+	if keep <= 0 {
+		return 0, nil
+	}
+	res, err := s.db.Exec(
+		`DELETE FROM notifications
+		 WHERE read=1 AND id < (
+		   SELECT id FROM notifications WHERE read=1 ORDER BY id DESC LIMIT 1 OFFSET ?
+		 )`, keep-1)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// ClearReadNotifications 清空全部已读通知（手动归档），未读不受影响。返回删除条数。
+// 去重基线在 image_digest_notified 表，不受影响。
+func (s *Store) ClearReadNotifications() (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM notifications WHERE read=1`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // MarkDockerImagesMissing 将「source=docker 且当前本机已不再出现」的镜像行标记为 stale（缺失），
@@ -431,19 +504,6 @@ func (s *Store) ListVersions(imageID int64) ([]models.ImageVersion, error) {
 }
 
 // ---- Notifications ----
-
-func (s *Store) CreateNotification(n *models.Notification) error {
-	typ := n.Type
-	if typ == "" {
-		typ = models.NotifUpdate
-	}
-	_, err := s.db.Exec(
-		`INSERT INTO notifications (image_id,image_name,reference,old_digest,new_digest,old_tag,new_tag,type,message,read,created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,0,?)`,
-		n.ImageID, n.ImageName, n.Reference, n.OldDigest, n.NewDigest,
-		n.OldTag, n.NewTag, string(typ), n.Message, nowStr())
-	return err
-}
 
 func (s *Store) ListNotifications(unreadOnly bool, cursorID int64) ([]models.Notification, error) {
 	q := `SELECT id,image_id,image_name,reference,old_digest,new_digest,old_tag,new_tag,type,message,read,created_at

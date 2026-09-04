@@ -154,6 +154,7 @@ docker pull --platform linux/arm64 ghcr.io/jingyuan9527/vigil:latest
 | GET | `/api/notifications?unread=1` | 通知列表（支持 `cursor` 参数翻页加载更早通知） |
 | POST | `/api/notifications/:id/read` | 标记单条已读 |
 | POST | `/api/notifications/read-all` | 全部已读 |
+| POST | `/api/notifications/clear-read` | 清空全部已读通知（未读不受影响；去重基线独立，不影响防刷屏） |
 | PUT | `/api/images/:id/mode` | 设置镜像检测模式覆写 `{ "mode": "auto" \| "digest-only" \| "pin-watch" }` |
 
 > **认证与安全**：登录态由后端维护，JWT 通过 `httpOnly` cookie（`SameSite=Lax`）下发，
@@ -183,7 +184,8 @@ docker pull --platform linux/arm64 ghcr.io/jingyuan9527/vigil:latest
 - `new-tag`（弱，系统 + 钉钉弱提醒）：仓库出现全新版本 tag（仅 Pin-Watch）。
 
 ### 防抖
-- digest 变更：同一摘要常规扫描只通知一次（按 image + digest 去重）；**强制扫描除外**——重新广播时再次通知；标记已读仅 UI 效果。
+- digest 变更：同一摘要常规扫描只通知一次（去重基线独立存于 `image_digest_notified` 表，与历史记录解耦）；**强制扫描除外**——重新广播时再次通知；标记已读仅 UI 效果，清空/清理已读通知不影响去重。
+- 已读历史保留策略：未读通知永不自动删除；已读通知在每次扫描后自动裁剪，最多保留最近 500 条；也可在通知页手动「清空已读」（未读不受影响）。
 - new-tag：每个 tag 仅通知一次；首扫建立已见标签基线，不刷屏。
 
 ### 忽略优先级最高

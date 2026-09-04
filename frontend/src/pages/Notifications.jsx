@@ -4,6 +4,7 @@ import { api, fmtShort, shortDigest } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import Spinner from '../components/Spinner'
 import Pagination from '../components/Pagination'
+import ConfirmDialog from '../components/ConfirmDialog'
 import { useToast } from '../components/Toast'
 
 const PAGE_SIZE = 8
@@ -52,6 +53,7 @@ export default function Notifications() {
   const [cursor, setCursor] = useState(0) // 当前已加载的最小 ID，用于加载更多
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(true) // 后端是否还有更早的通知（每页满 100 条才可能有）
+  const [confirmClear, setConfirmClear] = useState(false) // 清空已读确认弹窗
 
   const load = async (nextCursor, silent) => {
     if (!silent) setLoading(true)
@@ -127,6 +129,19 @@ export default function Notifications() {
     }
   }
 
+  // 清空已读：手动归档历史（未读不受影响；去重基线独立，不影响防刷屏）
+  const onClearRead = async () => {
+    try {
+      await api.clearReadNotifs()
+      setItems((prev) => prev.filter((n) => !n.read))
+      setConfirmClear(false)
+      toast('success', '已清空已读通知')
+    } catch {
+      setConfirmClear(false)
+      toast('error', '清空失败，请重试')
+    }
+  }
+
   // 一键对所有镜像重新检测更新（强制扫描：对所有版本差异补发通知）
   const rescanAll = async () => {
     if (scanning) return
@@ -148,6 +163,7 @@ export default function Notifications() {
   }
 
   const unread = items.filter((i) => !i.read).length
+  const readCount = items.filter((i) => i.read).length // 当前已加载窗口内的已读数（用于禁用清空按钮）
   const grouped = GROUPS.map((g) => ({ ...g, list: items.filter(g.match) }))
   const hasAny = items.length > 0
 
@@ -180,6 +196,13 @@ export default function Notifications() {
             className="rounded-xl border border-zinc-200 px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
           >
             全部已读
+          </button>
+          <button
+            onClick={() => setConfirmClear(true)}
+            disabled={readCount === 0}
+            className="rounded-xl border border-rose-200 px-3 py-2 text-sm font-medium text-rose-600 transition-colors hover:bg-rose-50 disabled:opacity-50 dark:border-rose-800 dark:text-rose-400 dark:hover:bg-rose-500/10"
+          >
+            清空已读
           </button>
           <button
             onClick={rescanAll}
@@ -262,6 +285,16 @@ export default function Notifications() {
         </div>
       )}
       </div>
+
+      <ConfirmDialog
+        open={confirmClear}
+        title="清空已读通知"
+        description="将删除所有已读通知，未读通知不受影响；去重不受影响，常规扫描不会因此重复提醒。此操作不可撤销。"
+        confirmText="确认清空"
+        danger
+        onConfirm={onClearRead}
+        onCancel={() => setConfirmClear(false)}
+      />
     </div>
   )
 }

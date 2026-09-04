@@ -65,6 +65,7 @@ export const api = {
   setMode: (id, mode) => putJSON(`/images/${id}/mode`, { mode }),
   markRead: (id) => postJSON('/notifications/' + id + '/read'),
   markAllRead: () => postJSON('/notifications/read-all'),
+  clearReadNotifs: () => postJSON('/notifications/clear-read'),
 }
 
 // 检测模式标签（用于镜像卡/对比详情展示）

@@ -51,6 +51,7 @@ func NewRouter(staticDir string, st *store.Store, sc *scanner.Scanner, reg *regi
 	mux.HandleFunc("/api/settings", a.handleSettings)
 	mux.HandleFunc("/api/notifications", a.notifications)
 	mux.HandleFunc("/api/notifications/read-all", a.notificationsReadAll)
+	mux.HandleFunc("/api/notifications/clear-read", a.notificationsClearRead)
 	mux.HandleFunc("/api/notifications/", a.notificationByID)
 	mux.HandleFunc("/api/dingtalk/test", a.testDingTalk)
 
@@ -477,6 +478,21 @@ func (a *api) notificationsReadAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"result": "ok"})
+}
+
+// notificationsClearRead 清空全部已读通知（手动归档），未读不受影响。
+// 去重基线独立存储，清理不影响常规扫描的防刷屏。
+func (a *api) notificationsClearRead(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	n, err := a.store.ClearReadNotifications()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"result": "ok", "deleted": n})
 }
 
 // testDingTalk 校验钉钉 Webhook 连通性：发送一条测试消息并回传结果。
