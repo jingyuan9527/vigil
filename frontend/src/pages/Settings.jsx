@@ -28,6 +28,8 @@ export default function Settings() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
+  const [testing, setTesting] = useState(false)
+  const [testMsg, setTestMsg] = useState(null)
 
   useEffect(() => {
     ;(async () => {
@@ -56,6 +58,23 @@ export default function Settings() {
       setMsg({ type: 'error', text: '保存失败，请重试' })
     } finally {
       setSaving(false)
+    }
+  }
+
+  const onTestDingTalk = async () => {
+    setTesting(true)
+    setTestMsg(null)
+    try {
+      const res = await api.testDingTalk(form.dingtalk_webhook)
+      if (res.ok) {
+        setTestMsg({ type: 'ok', text: '测试通知已发送，请检查钉钉群是否收到' })
+      } else {
+        setTestMsg({ type: 'error', text: '连通性测试失败：' + (res.error || '未知错误') })
+      }
+    } catch (e) {
+      setTestMsg({ type: 'error', text: '测试请求失败：' + (e?.message || e) })
+    } finally {
+      setTesting(false)
     }
   }
 
@@ -144,6 +163,27 @@ export default function Settings() {
               onChange={(e) => update({ dingtalk_webhook: e.target.value })}
               className="mt-3 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
             />
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={onTestDingTalk}
+                disabled={testing || !form.dingtalk_webhook.trim()}
+                className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              >
+                {testing ? '测试中…' : '测试连接'}
+              </button>
+              {testMsg && (
+                <span
+                  className={`ml-3 text-sm ${
+                    testMsg.type === 'ok'
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-red-600 dark:text-red-400'
+                  }`}
+                >
+                  {testMsg.text}
+                </span>
+              )}
+            </div>
           </BentoCard>
         </div>
 

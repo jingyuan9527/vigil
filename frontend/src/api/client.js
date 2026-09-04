@@ -79,6 +79,7 @@ export const api = {
   scanNow: () => postJSON('/scan'),
   settings: () => getJSON('/settings'),
   saveSettings: (s) => putJSON('/settings', s),
+  testDingTalk: (webhook) => postJSON('/dingtalk/test', { webhook }),
   addImage: (reference) => postJSON('/images', { reference }),
   removeImage: (id) => del('/images/' + id),
   setIgnored: (id, ignored) => putJSON(`/images/${id}/ignored`, { ignored }),

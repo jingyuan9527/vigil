@@ -14,6 +14,7 @@ import (
 	"dockmon/internal/auth"
 	"dockmon/internal/config"
 	"dockmon/internal/models"
+	"dockmon/internal/notification"
 	"dockmon/internal/registry"
 	"dockmon/internal/scanner"
 	"dockmon/internal/store"
@@ -49,6 +50,7 @@ func NewRouter(staticDir string, st *store.Store, sc *scanner.Scanner, reg *regi
 	mux.HandleFunc("/api/notifications", a.notifications)
 	mux.HandleFunc("/api/notifications/read-all", a.notificationsReadAll)
 	mux.HandleFunc("/api/notifications/", a.notificationByID)
+	mux.HandleFunc("/api/dingtalk/test", a.testDingTalk)
 
 	// 认证中间件包裹 API 路由，静态资源不受影响
 	return a.withAuth(a.withStatic(mux))
@@ -408,4 +410,37 @@ func (a *api) notificationsReadAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"result": "ok"})
+}
+
+// testDingTalk 校验钉钉 Webhook 连通性：发送一条测试消息并回传结果。
+// 请求体可携带 webhook（便于保存前先试），缺省则使用当前已保存的设置。
+func (a *api) testDingTalk(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	var body struct {
+		Webhook string `json:"webhook"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	webhook := strings.TrimSpace(body.Webhook)
+	if webhook == "" {
+		webhook = strings.TrimSpace(a.settings.Snapshot().DingTalkWebhook)
+	}
+	if webhook == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "未配置钉钉 Webhook，请先在上方填写"})
+		return
+	}
+	err := notification.SendDingTalk(webhook,
+		"DockMon 连通性测试",
+		"### ✅ 连通性测试成功\n\n这是一条来自 DockMon 的测试消息，说明钉钉通知配置正确。\n\n**时间**: "+time.Now().Format("2006-01-02 15:04:05"),
+	)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
 }
