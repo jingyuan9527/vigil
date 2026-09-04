@@ -192,7 +192,8 @@ export default function Notifications() {
           </p>
         </BentoCard>
       ) : (
-        <div className="grid items-start gap-6 lg:grid-cols-2">
+        /* 两栏等高对齐：去掉 items-start 让卡片等高，底部页脚区保持在同一水平线 */
+        <div className="grid gap-6 lg:grid-cols-2">
           {grouped.map((g) => (
             <NotifGroup
               key={g.key}
@@ -218,12 +219,13 @@ function NotifGroup({ group, page, collapsed, onToggle, onPage, onMarkRead }) {
   const pageItems = group.list.slice((cur - 1) * PAGE_SIZE, cur * PAGE_SIZE)
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-zinc-100 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+    /* 展开时随行等高（两栏底部对齐）；折叠后 self-start 缩回自身内容高度，不拉伸成空白大卡 */
+    <section className={`flex flex-col overflow-hidden rounded-2xl border border-zinc-100 bg-white dark:border-zinc-800 dark:bg-zinc-900 ${collapsed ? 'self-start' : ''}`}>
       {/* 组头：图标 + 标题 + 计数 + 折叠 */}
       <button
         onClick={onToggle}
         aria-expanded={!collapsed}
-        className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-zinc-50 md:px-6 dark:hover:bg-zinc-800/50"
+        className="flex w-full shrink-0 items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-zinc-50 md:px-6 dark:hover:bg-zinc-800/50"
       >
         <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${group.iconCls}`}>{group.icon}</span>
         <div className="min-w-0 flex-1">
@@ -243,12 +245,12 @@ function NotifGroup({ group, page, collapsed, onToggle, onPage, onMarkRead }) {
 
       {!collapsed && (
         total === 0 ? (
-          <div className="border-t border-zinc-100 px-4 py-6 text-center text-sm text-zinc-400 md:px-5 dark:border-zinc-800 dark:text-zinc-500">
+          <div className="flex flex-1 items-center justify-center border-t border-zinc-100 px-4 py-6 text-center text-sm text-zinc-400 md:px-5 dark:border-zinc-800 dark:text-zinc-500">
             本组暂无通知
           </div>
         ) : (
           <>
-            <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            <ul className="flex-1 divide-y divide-zinc-100 dark:divide-zinc-800">
               {pageItems.map((n) => (
                 <li key={n.id} className={`flex items-start gap-3 px-4 py-3 transition-colors hover:bg-zinc-50 md:px-5 dark:hover:bg-zinc-800/50 ${n.read ? 'opacity-60' : ''}`}>
                   <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.read ? 'bg-zinc-300 dark:bg-zinc-600' : group.rowAccent}`} />
@@ -285,9 +287,15 @@ function NotifGroup({ group, page, collapsed, onToggle, onPage, onMarkRead }) {
                 </li>
               ))}
             </ul>
-            {/* 组内独立分页 */}
-            <div className="border-t border-zinc-100 px-4 py-2.5 dark:border-zinc-800">
-              <Pagination page={cur} total={total} pageSize={PAGE_SIZE} onChange={onPage} />
+            {/* 底部页脚：两条目数超一页才出现分页条；单页时展示等高的提示条，保证两栏页脚对齐 */}
+            <div className="mt-auto border-t border-zinc-100 px-4 py-2.5 dark:border-zinc-800">
+              {total > PAGE_SIZE ? (
+                <Pagination page={cur} total={total} pageSize={PAGE_SIZE} onChange={onPage} />
+              ) : (
+                <p className="flex h-10 items-center justify-center text-xs text-zinc-400 dark:text-zinc-500">
+                  共 {total} 条 · 单页展示
+                </p>
+              )}
             </div>
           </>
         )

@@ -135,9 +135,10 @@ export default function Compare() {
         </div>
       )}
 
-      <div className="grid gap-6 overflow-hidden lg:h-[calc(100vh-230px)] lg:grid-cols-[280px_1fr]">
+      {/* 两侧栏限高各自内滚：行轨道显式收缩（1fr），否则行高会按内容撑高并被 overflow-hidden 裁掉 */}
+      <div className="grid gap-6 overflow-hidden lg:h-[calc(100vh-230px)] lg:grid-cols-[280px_1fr] lg:grid-rows-[minmax(0,1fr)]">
         {/* 桌面选择器（仅 lg）：搜索 + 状态过滤 + 紧凑行列表（有更新优先） */}
-        <div className="hidden min-w-0 flex-col gap-3 lg:flex lg:max-h-full">
+        <div className="hidden min-w-0 flex-col gap-3 lg:flex lg:min-h-0 lg:max-h-full">
           <div className="space-y-2.5">
             <input
               value={query}
