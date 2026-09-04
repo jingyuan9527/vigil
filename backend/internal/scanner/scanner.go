@@ -163,7 +163,7 @@ func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) 
 		diff := (j.localDigest != "" && j.localDigest != remote) ||
 			(j.localDigest == "" && prevRemote != "" && prevRemote != remote)
 
-		// 同一个 digest 只通知一次（常规转移与强制补发共用此闸门）
+		// 同一个 digest 常规扫描只通知一次（防刷屏）
 		notified, _ := s.store.HasDigestNotification(img.ID, remote)
 		shouldNotify := false
 		switch {
@@ -175,7 +175,10 @@ func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) 
 			// 含 Pin-Watch 锁定 tag 被覆盖（常规扫描对 Pin-Watch 的 digest 变化不告警）。
 			shouldNotify = true
 		}
-		if shouldNotify && !notified {
+		// 去重闸门：常规扫描下同一 digest 只通知一次（防刷屏）。
+		// 强制扫描（「全部重新扫描」）语义为重新广播：无论历史是否通知过、
+		// 用户是否已读，只要当前存在版本差异就再次通知（系统 + 钉钉）。
+		if shouldNotify && (!notified || force) {
 			// old 取「用户当前持有的」摘要：本地摘要优先，纯远端监控回退到上次远端
 			old := j.localDigest
 			if old == "" {

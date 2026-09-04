@@ -252,7 +252,8 @@ func TestRollingTagNoTagInspection(t *testing.T) {
 }
 
 // TestForceScanBackfillsAndDedups 验证强制扫描：对当前存在版本差异的镜像补发 update 通知，
-// 并按 (image, digest) 去重——重复强制扫描不重复通知。覆盖 Pin-Watch 锁定 tag 被覆盖的情况。
+// 语义为重新广播——每次强制扫描都会再次通知（不受已读/历史通知影响）。
+// 覆盖 Pin-Watch 锁定 tag 被覆盖的情况。
 func TestForceScanBackfillsAndDedups(t *testing.T) {
 	localDigest := "aaaaaa"
 	remoteDigest := "bbbbbb" // 远端从一开始就与本地不同
@@ -282,10 +283,10 @@ func TestForceScanBackfillsAndDedups(t *testing.T) {
 		t.Fatalf("unread after force scan = %d, want 1", u)
 	}
 
-	// 再次强制扫描：同一 digest 已通知过 → 不重复
+	// 再次强制扫描：强制扫描=重新广播，同一 digest 已通知过也再次通知
 	sc.Run(context.Background(), true)
-	if u, _ := st.UnreadCount(); u != 1 {
-		t.Errorf("unread after second force scan = %d, want 1 (dedup by digest)", u)
+	if u, _ := st.UnreadCount(); u != 2 {
+		t.Errorf("unread after second force scan = %d, want 2 (force re-broadcasts)", u)
 	}
 }
 
