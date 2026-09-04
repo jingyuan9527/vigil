@@ -69,8 +69,16 @@ export default function Compare() {
         </div>
 
         {/* 详情 */}
-        {loadingDetail || !detail ? (
+        {!id ? (
+          <BentoCard className="flex min-h-40 items-center justify-center text-center text-sm text-zinc-400 dark:text-zinc-500">
+            请在左侧选择一个镜像查看版本详情
+          </BentoCard>
+        ) : loadingDetail ? (
           <Spinner label="加载版本详情…" />
+        ) : !detail ? (
+          <BentoCard className="flex min-h-40 items-center justify-center text-center text-sm text-zinc-400 dark:text-zinc-500">
+            镜像不存在或已被移除
+          </BentoCard>
         ) : (
           <div className="space-y-6">
             {/* 当前 vs 最新 */}

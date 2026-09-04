@@ -9,7 +9,7 @@
 |------|------|------|
 | P0 | 0 | 无数据丢失 / 安全漏洞 / 主流程崩溃 |
 | P1 | 1 | 仓库既有 API 单测必然失败（已随本次一并修复） |
-| P2 | 2 | 非阻塞体验 / 数据整洁性观察项（1 项已处理，见下） |
+| P2 | 1 | 非阻塞观察项（2 项已随治理处理：docker 残留清理、Compare 失效 id 空态） |
 
 ---
 
@@ -28,13 +28,9 @@
 
 ## P2（观察项）
 
-> 注：原 P2.1「本机已删除 docker 镜像在库内残留」已在功能二次迭代中**一并处理**（新增 stale 清理），故此处仅剩两项待办。
+> 注：原 P2「本机已删除 docker 镜像残留」与「Compare 失效 id 加载态」均已处理（见下两节），此处仅剩一项待办。
 
-1. **Compare 页对已删除镜像的 id 会停在加载态**
-   - `frontend/src/pages/Compare.jsx:72-73`：当 `detail` 为 `null` 且 `loadingDetail` 为 `false` 时分支仍渲染 `Spinner`，若其它入口（另一窗口删除）指向失效 id 会一直转圈。
-   - 建议后续对 `null` 显示"镜像不存在/已被移除"空态。低概率边缘，本次未改。
-
-2. **镜像状态过滤的语义边界**
+1. **镜像状态过滤的语义边界**
    - B 语义（忽略=仍扫描不提醒）下，被忽略镜像在「有更新」筛选里仍会出现且状态为 `update-available`，靠卡片内"已忽略"徽标区分。
    - 这是有意为之（见需求确认）；仅提示后续若用户反馈"忽略了怎么还橙色"，可提供"忽略项默认折叠/置灰"的视觉强化。
 
@@ -43,6 +39,12 @@
 - **位置**：`backend/internal/scanner/scanner.go` 新增 `pruneRemovedDockerImages`；`backend/internal/store/store.go` 新增 `MarkDockerImagesMissing`。
 - **行为**：每轮扫描结束时（Docker 可达时），将 `source='docker'` 且本机已不存在的行标记为 `stale`（缺失）；**manual / watch 来源与 ignored 项不受影响**；Docker 不可用或存活引用为空时不贸然清理。
 - **单测**：`TestMarkDockerImagesMissing`（store）已补充，验证存活 docker / manual 不受影响、已删 docker 置 stale、空 liveRefs 安全无操作。
+
+## 已处理的附带项：Compare 页失效 id 卡加载态
+
+- **位置**：`frontend/src/pages/Compare.jsx` 详情区改为四态（未选 / 加载中 / 不存在 / 正常），避免无 id 或失效 id 时无限转圈。
+- **行为**：无 id → "请从左侧选择"；加载中 → Spinner；加载完成取不到 detail → "镜像不存在或已被移除"；否则渲染详情。
+- **验证**：`npm run build` 通过。
 
 ---
 
