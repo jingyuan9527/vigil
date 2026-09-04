@@ -14,9 +14,21 @@ const FILTERS = [
   { key: 'up-to-date', label: '已是最新' },
   { key: 'ignored', label: '已忽略' },
   { key: 'unknown', label: '未知' },
+  { key: 'stale', label: '缺失' },
+]
+
+// 概览卡统计项（可点击直接切换过滤）
+const OVERVIEW = [
+  { label: '有更新', key: 'update-available', cls: 'bg-amber-500', activeCls: 'ring-2 ring-amber-500/40 bg-amber-50/60 dark:bg-amber-500/10' },
+  { label: '已是最新', key: 'up-to-date', cls: 'bg-emerald-500', activeCls: 'ring-2 ring-emerald-500/40 bg-emerald-50/60 dark:bg-emerald-500/10' },
+  { label: '未知', key: 'unknown', cls: 'bg-zinc-400', activeCls: 'ring-2 ring-zinc-400/40 bg-zinc-100 dark:bg-zinc-800' },
+  { label: '缺失', key: 'stale', cls: 'bg-rose-500', activeCls: 'ring-2 ring-rose-500/40 bg-rose-50/60 dark:bg-rose-500/10' },
 ]
 
 const PAGE_SIZE = 12
+
+// 列表排序权重：有更新优先，便于一眼定位需要处理的镜像
+const STATUS_ORDER = { 'update-available': 0, unknown: 1, 'up-to-date': 2, stale: 3 }
 
 export default function Images() {
   const navigate = useNavigate()
@@ -56,7 +68,9 @@ export default function Images() {
     let out = images
     if (filter === 'ignored') out = out.filter((i) => i.ignored)
     if (query) out = out.filter((i) => i.reference.toLowerCase().includes(query.toLowerCase()))
-    return out
+    return [...out].sort(
+      (a, b) => (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9) || a.reference.localeCompare(b.reference),
+    )
   }, [images, query, filter])
 
   // 分页切片（客户端分页，基于过滤后的全集）
@@ -114,6 +128,9 @@ export default function Images() {
     }
   }
 
+  // 概览块点击：切换对应状态过滤（再点一次取消）
+  const pickOverview = (key) => setFilter((f) => (f === key ? '' : key))
+
   const confirmImg = images.find((i) => i.id === confirmId)
 
   return (
@@ -121,14 +138,14 @@ export default function Images() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 md:text-3xl">镜像列表</h1>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">所有被监控的镜像引用及其版本状态。</p>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">所有被监控的镜像引用及其版本状态，有更新的排在前。</p>
         </div>
-        <form onSubmit={onAdd} className="flex min-w-0 items-center gap-3">
+        <form onSubmit={onAdd} className="flex min-w-0 items-center gap-2.5">
           <input
             value={newRef}
             onChange={(e) => setNewRef(e.target.value)}
             placeholder="新增监控，如 redis:7"
-            className="min-w-0 flex-1 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm outline-none transition-all focus:border-bento-accent focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+            className="min-w-0 flex-1 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm outline-none transition-all focus:border-bento-accent focus:ring-2 focus:ring-blue-500/20 sm:w-56 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
           />
           <button disabled={adding} className="shrink-0 rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-60 active:scale-95 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200">
             {adding ? '添加中…' : '添加'}
@@ -138,7 +155,7 @@ export default function Images() {
 
       {/* 筛选 chips（移动端横向滚动）+ 搜索（移动端全宽） */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex gap-3 overflow-x-auto pb-1 sm:pb-0">
+        <div className="flex gap-2.5 overflow-x-auto pb-1 sm:pb-0">
           {FILTERS.map((f) => (
             <button
               key={f.key}
@@ -187,25 +204,31 @@ export default function Images() {
         </BentoCard>
       ) : (
         <>
-          {/* 监控概览：整行宽卡（规范 §5.3，保持 Bento 尺寸非全等） */}
+          {/* 监控概览：可点击的状态过滤入口（整行宽卡，规范 §5.3） */}
           <BentoCard>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">监控概览</h3>
-              <span className="text-xs text-zinc-400 dark:text-zinc-500">当前匹配 {filtered.length} 个</span>
+              <span className="text-xs text-zinc-400 dark:text-zinc-500">
+                当前匹配 {filtered.length} 个{filter && filter !== 'ignored' ? ' · 点击下方状态可筛选' : ''}
+              </span>
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {[
-                { label: '有更新', v: countStatus(filtered, 'update-available'), cls: 'bg-amber-500' },
-                { label: '已是最新', v: countStatus(filtered, 'up-to-date'), cls: 'bg-emerald-500' },
-                { label: '未知', v: countStatus(filtered, 'unknown'), cls: 'bg-zinc-400' },
-                { label: '缺失', v: countStatus(filtered, 'stale'), cls: 'bg-rose-500' },
-              ].map((s) => (
-                <div key={s.label} className="flex items-center gap-3">
-                  <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${s.cls}`} />
-                  <span className="text-sm text-zinc-500 dark:text-zinc-400">{s.label}</span>
-                  <span className="ml-auto text-lg font-bold tabular-nums text-zinc-900 dark:text-zinc-100">{s.v}</span>
-                </div>
-              ))}
+            <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+              {OVERVIEW.map((s) => {
+                const v = countStatus(filtered, s.key)
+                const active = filter === s.key
+                return (
+                  <button
+                    key={s.key}
+                    onClick={() => pickOverview(s.key)}
+                    aria-pressed={active}
+                    className={`flex items-center gap-2.5 rounded-xl border border-transparent px-3 py-2.5 text-left transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/60 ${active ? s.activeCls : ''}`}
+                  >
+                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${s.cls}`} />
+                    <span className="text-sm text-zinc-500 dark:text-zinc-400">{s.label}</span>
+                    <span className="ml-auto text-lg font-bold tabular-nums text-zinc-900 dark:text-zinc-100">{v}</span>
+                  </button>
+                )
+              })}
             </div>
           </BentoCard>
           <div className="bento-grid">
@@ -226,6 +249,8 @@ export default function Images() {
                   <div className="mt-0.5 flex items-center gap-1.5 text-xs text-zinc-400">
                     <span className={`h-1.5 w-1.5 rounded-full ${img.source === 'docker' ? 'bg-blue-400' : 'bg-zinc-300 dark:bg-zinc-600'}`} />
                     {img.source === 'docker' ? 'Docker' : '手动'}
+                    <span className="text-zinc-300 dark:text-zinc-600">·</span>
+                    {img.last_check ? fmtTime(img.last_check) : '未扫描'}
                   </div>
                 </div>
                 <StatusBadge status={img.status} />
@@ -242,32 +267,30 @@ export default function Images() {
                 <DigestRow label="远端" value={shortDigest(img.remote_digest)} />
               </div>
 
-              <div className="mt-auto pt-3">
-                <div className="mb-3 text-xs text-zinc-400">
-                  {img.last_check ? fmtTime(img.last_check) : '未扫描'}
-                </div>
-                <div className="flex gap-3">
+              {/* 操作区：一行三钮，紧凑不堆叠 */}
+              <div className="mt-auto pt-4">
+                <div className="flex gap-2">
                   <button
                     onClick={() => navigate('/compare?id=' + img.id)}
-                    className="flex-1 rounded-xl border border-zinc-200 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:border-zinc-300 active:scale-95 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:hover:border-zinc-600"
+                    className="flex-1 rounded-xl border border-zinc-200 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:border-zinc-300 hover:bg-zinc-50 active:scale-95 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:hover:border-zinc-600"
                   >
                     版本对比
                   </button>
-                </div>
-                <div className="mt-3 flex gap-3">
                   <button
                     onClick={() => onToggleIgnore(img)}
-                    className={`flex-1 rounded-xl border py-1.5 text-sm font-medium transition-colors active:scale-95 ${
+                    title={img.ignored ? '恢复该镜像的更新提醒' : '忽略该镜像的更新提醒（仍扫描不提醒）'}
+                    className={`shrink-0 rounded-xl border px-3 py-1.5 text-sm font-medium transition-colors active:scale-95 ${
                       img.ignored
                         ? 'border-emerald-300 text-emerald-600 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-500/10'
                         : 'border-zinc-200 text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200'
                     }`}
                   >
-                    {img.ignored ? '恢复提醒' : '忽略'}
+                    {img.ignored ? '恢复' : '忽略'}
                   </button>
                   <button
                     onClick={() => setConfirmId(img.id)}
-                    className="shrink-0 rounded-xl border border-zinc-200 px-3 py-1.5 text-sm text-zinc-400 transition-colors hover:bg-rose-50 hover:text-rose-500 hover:border-rose-200 active:scale-95 dark:border-zinc-700 dark:hover:bg-rose-500/10 dark:hover:text-rose-400 dark:hover:border-rose-800"
+                    title="从监控中移除该镜像"
+                    className="shrink-0 rounded-xl border border-zinc-200 px-3 py-1.5 text-sm text-zinc-400 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 active:scale-95 dark:border-zinc-700 dark:hover:border-rose-800 dark:hover:bg-rose-500/10 dark:hover:text-rose-400"
                   >
                     移除
                   </button>
