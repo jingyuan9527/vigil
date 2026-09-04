@@ -45,9 +45,9 @@ export default function Compare() {
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">对比本地与远端镜像摘要，查看版本时间线与可用标签。</p>
       </div>
 
-      <div className="grid gap-6 overflow-hidden lg:grid-cols-[260px_1fr]">
+      <div className="grid gap-6 overflow-hidden lg:h-[calc(100vh-230px)] lg:grid-cols-[260px_1fr]">
         {/* 选择器 */}
-        <div className="min-w-0 space-y-2">
+        <div className="min-w-0 space-y-2 overflow-y-auto pr-1 lg:max-h-full">
           {loading ? (
             <Spinner />
           ) : (
@@ -69,6 +69,7 @@ export default function Compare() {
         </div>
 
         {/* 详情 */}
+        <div className="min-w-0 overflow-y-auto">
         {!id ? (
           <BentoCard className="flex min-h-40 items-center justify-center text-center text-sm text-zinc-400 dark:text-zinc-500">
             请在左侧选择一个镜像查看版本详情
@@ -142,6 +143,7 @@ export default function Compare() {
             </BentoCard>
           </div>
         )}
+        </div>
       </div>
     </div>
   )

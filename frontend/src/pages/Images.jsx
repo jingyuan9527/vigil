@@ -26,6 +26,7 @@ export default function Images() {
   const [newRef, setNewRef] = useState('')
   const [adding, setAdding] = useState(false)
   const [err, setErr] = useState('')
+  const [confirmId, setConfirmId] = useState(null) // 待页内确认移除的镜像 id
 
   const load = async () => {
     setLoading(true)
@@ -90,8 +91,8 @@ export default function Images() {
   }
 
   const onRemove = async (id) => {
-    if (!confirm('确定移除该监控项？')) return
     await api.removeImage(id)
+    setConfirmId(null)
     await load()
   }
 
@@ -198,22 +199,41 @@ export default function Images() {
                   </button>
                 </div>
                 <div className="mt-2 flex gap-2">
-                  <button
-                    onClick={() => onToggleIgnore(img)}
-                    className={`flex-1 rounded-xl border py-1.5 text-sm font-medium transition-colors ${
-                      img.ignored
-                        ? 'border-emerald-300 text-emerald-600 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-500/10'
-                        : 'border-zinc-200 text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200'
-                    }`}
-                  >
-                    {img.ignored ? '恢复提醒' : '忽略'}
-                  </button>
-                  <button
-                    onClick={() => onRemove(img.id)}
-                    className="rounded-xl border border-zinc-200 px-3 py-1.5 text-sm text-zinc-400 transition-colors hover:bg-rose-50 hover:text-rose-500 hover:border-rose-200 dark:border-zinc-700 dark:hover:bg-rose-500/10 dark:hover:text-rose-400 dark:hover:border-rose-800"
-                  >
-                    移除
-                  </button>
+                  {confirmId === img.id ? (
+                    <>
+                      <button
+                        onClick={() => setConfirmId(null)}
+                        className="flex-1 rounded-xl border border-zinc-200 py-1.5 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      >
+                        取消
+                      </button>
+                      <button
+                        onClick={() => onRemove(img.id)}
+                        className="flex-1 rounded-xl bg-rose-500 py-1.5 text-sm font-medium text-white transition-colors hover:bg-rose-600"
+                      >
+                        确认移除
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => onToggleIgnore(img)}
+                        className={`flex-1 rounded-xl border py-1.5 text-sm font-medium transition-colors ${
+                          img.ignored
+                            ? 'border-emerald-300 text-emerald-600 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-500/10'
+                            : 'border-zinc-200 text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200'
+                        }`}
+                      >
+                        {img.ignored ? '恢复提醒' : '忽略'}
+                      </button>
+                      <button
+                        onClick={() => setConfirmId(img.id)}
+                        className="rounded-xl border border-zinc-200 px-3 py-1.5 text-sm text-zinc-400 transition-colors hover:bg-rose-50 hover:text-rose-500 hover:border-rose-200 dark:border-zinc-700 dark:hover:bg-rose-500/10 dark:hover:text-rose-400 dark:hover:border-rose-800"
+                      >
+                        移除
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             </BentoCard>
