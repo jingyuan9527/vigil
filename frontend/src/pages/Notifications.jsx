@@ -91,13 +91,13 @@ export default function Notifications() {
     }
   }
 
-  // 一键对所有镜像重新检测更新（后端全量扫描）
+  // 一键对所有镜像重新检测更新（强制扫描：对所有版本差异补发通知）
   const rescanAll = async () => {
     if (scanning) return
     setScanning(true)
     try {
-      await api.scanNow()
-      toast('success', '已触发全量重新扫描，结果稍后自动刷新')
+      await api.scanNow(true)
+      toast('success', '已触发强制重新扫描，版本差异将逐一补报，结果稍后自动刷新')
       setTimeout(load, 1500)
       setTimeout(() => {
         load()

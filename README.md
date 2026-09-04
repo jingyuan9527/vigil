@@ -143,13 +143,44 @@ docker pull --platform linux/arm64 ghcr.io/jingyuan9527/vigil:latest
 | POST | `/api/images` | 新增手动监控 `{ "reference": "nginx:latest" }` |
 | GET | `/api/images/:id` | 镜像详情（含版本时间线、可用 tag） |
 | DELETE | `/api/images/:id` | 移除监控 |
-| POST | `/api/scan` | 立即触发一次扫描 |
+| POST | `/api/scan?force=1` | 立即触发一次扫描；`force=1` 为强制扫描，对所有版本差异补发通知（按摘要去重） |
 | GET | `/api/settings` | 获取当前运行时设置（扫描间隔、注册表、演示列表等） |
 | PUT | `/api/settings` | 更新设置，持久化并即时生效（重启后仍保留） |
 | GET | `/api/scans` | 扫描历史 |
 | GET | `/api/notifications?unread=1` | 通知列表 |
 | POST | `/api/notifications/:id/read` | 标记单条已读 |
 | POST | `/api/notifications/read-all` | 全部已读 |
+| PUT | `/api/images/:id/mode` | 设置镜像检测模式覆写 `{ "mode": "auto" \| "digest-only" \| "pin-watch" }` |
+
+---
+
+## 检测模式与通知边界
+
+每个镜像有两种检测模式，默认按 tag 自动识别（用户可在镜像列表手动覆写单个镜像）：
+
+### Digest-Only（仅校验当前标签摘要）
+- 默认分配给浮动标签（`latest` / `nightly` / `dev` / `canary` / `beta`）及其它非版本号 tag。
+- 只查当前 tag 的远端摘要是否变化 → 变化即发「更新告警」。
+- **不拉取仓库全部 tag 列表，不通知别的新版本。**
+
+### Pin-Watch（锁定版本 + 监视新标签）
+- 默认分配给数字版本号 tag（如 `8.4.5`、`v3.9`、`1.2.3-alpine`）。
+- 仍对比当前 tag 摘要（用于状态与版本时间线），但**锁定 tag 被仓库覆盖时不发告警**。
+- 额外巡检仓库完整 tag 列表，出现从未见过的版本 tag → 每个 tag 发一条「新版本发布通知」（每个 tag 仅一次，记入已见清单）。
+
+### 通知类型（两类完全分开）
+- `update`（强，系统 + 钉钉）：当前标签内容变更（Digest-Only 常规转移，或强制扫描补报）。
+- `new-tag`（弱，系统 + 钉钉弱提醒）：仓库出现全新版本 tag（仅 Pin-Watch）。
+
+### 防抖
+- digest 变更：同一个摘要只通知一次（按 image + digest 去重）；标记已读仅 UI 效果。
+- new-tag：每个 tag 仅通知一次；首扫建立已见标签基线，不刷屏。
+
+### 忽略优先级最高
+镜像被忽略后**跳过全部检测**（不校验摘要、不巡检标签），行数据冻结，也不产生任何通知。
+
+### 强制扫描
+更新通知页「全部重新扫描」触发强制扫描：对当前所有存在版本差异的镜像补发 `update` 通知（含 Pin-Watch 锁定 tag 被覆盖的情况），统一按 (image, digest) 去重，重复触发不会刷屏。
 
 ---
 

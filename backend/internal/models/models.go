@@ -24,7 +24,9 @@ type Image struct {
 	RemoteDigest string     `json:"remote_digest"`
 	Status       ImageStatus `json:"status"`
 	Ignored      bool       `json:"ignored"`      // 用户手动忽略该镜像的更新提醒（仍扫描，但不产生通知）
-	NotifiedNewTag string   `json:"notified_new_tag,omitempty"` // 已弱提醒过的「更高新版本」目标 tag，用于去重
+	NotifiedNewTag string   `json:"notified_new_tag,omitempty"` // （遗留字段）已弱提醒过的「更高新版本」目标 tag；新版改用 image_seen_tags 表
+	Mode          string   `json:"mode"`                        // 用户覆写的检测模式（auto/digest-only/pin-watch），由 SetMode 维护，扫描不覆盖
+	EffectiveMode string   `json:"effective_mode"`              // 生效检测模式（读取时由 ResolveMode 计算，不落库）
 	LastCheck    *time.Time `json:"last_check"`
 	LastUpdate   *time.Time `json:"last_update"` // 远端摘要最近一次变化时间
 	Error        string     `json:"error,omitempty"`

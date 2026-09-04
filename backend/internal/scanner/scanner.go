@@ -16,12 +16,12 @@ import (
 	"dockmon/internal/version"
 )
 
-// Scanner 负责采集镜像、检测远端版本变化并生成通知。
+// Scanner 负责采集镜像、按检测模式检测远端版本变化并生成通知。
 type Scanner struct {
-	cfg     *config.Config
-	store   *store.Store
-	docker  *docker.Client
-	reg     *registry.Client
+	cfg      *config.Config
+	store    *store.Store
+	docker   *docker.Client
+	reg      *registry.Client
 	settings *config.LiveSettings
 }
 
@@ -83,15 +83,27 @@ func (s *Scanner) collectJobs(ctx context.Context) []job {
 	return jobs
 }
 
-// process 处理单个镜像：拉取远端摘要、比较、落库、必要时生成通知。
-func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
+// process 处理单个镜像：拉取远端摘要、比较、落库，按生效检测模式生成通知。
+//
+// force=true 时为「强制扫描」：对当前存在版本差异的镜像补发 update 通知
+// （含 Pin-Watch 锁定 tag 被覆盖的情况），统一按 (image, digest) 去重。
+func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) {
 	ref := registry.ParseRef(j.reference)
 	existing, _ := s.store.GetImageByRef(j.reference)
 
+	// 忽略优先级最高：跳过全部检测（digest 校验与 tag 巡检都不执行），
+	// 行数据保持冻结，不产生任何通知。仅用于采集的本地摘要也不落库。
+	if existing != nil && existing.Ignored {
+		return false, nil
+	}
+
 	prevRemote := ""
+	mode := models.ModeAuto
 	if existing != nil {
 		prevRemote = existing.RemoteDigest
+		mode = existing.Mode
 	}
+	effective := models.ResolveMode(mode, ref.Tag)
 
 	remote, rerr := s.reg.ManifestDigest(ctx, ref)
 
@@ -107,6 +119,7 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 		Status:       models.StatusUnknown,
 		LastCheck:    &now,
 		CreatedAt:    now,
+		Mode:         mode,
 	}
 	if existing != nil {
 		img.ID = existing.ID
@@ -142,97 +155,128 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 		_ = s.store.AddVersion(img.ID, remote, ref.Tag)
 	}
 
-	// 强更新：同一 tag 的远端 digest 发生变化（非首次）时通知，避免首扫噪声。
-	// 被用户忽略的镜像（Ignored）仍会扫描、状态照常更新，但不再产生系统/钉钉通知。
 	found := false
-	if rerr == nil && changed {
-		ignored := existing != nil && existing.Ignored
-		if !ignored {
+	if rerr == nil && remote != "" {
+		// 是否存在「版本差异」：有本地摘要时比对本地与远端；纯远端监控时比对上次已知远端。
+		diff := (j.localDigest != "" && j.localDigest != remote) ||
+			(j.localDigest == "" && prevRemote != "" && prevRemote != remote)
+
+		// 同一个 digest 只通知一次（常规转移与强制补发共用此闸门）
+		notified, _ := s.store.HasDigestNotification(img.ID, remote)
+		shouldNotify := false
+		switch {
+		case effective == models.ModeDigestOnly && changed && status == models.StatusUpdateAvailable:
+			// 常规扫描：浮动/仅摘要模式下当前 tag 内容更新 → 强提醒（系统+钉钉）
+			shouldNotify = true
+		case force && diff:
+			// 强制扫描：对所有当前存在版本差异的镜像补发通知，
+			// 含 Pin-Watch 锁定 tag 被覆盖（常规扫描对 Pin-Watch 的 digest 变化不告警）。
+			shouldNotify = true
+		}
+		if shouldNotify && !notified {
+			// old 取「用户当前持有的」摘要：本地摘要优先，纯远端监控回退到上次远端
+			old := j.localDigest
+			if old == "" {
+				old = prevRemote
+			}
 			msg := fmt.Sprintf("镜像 %s 检测到新版本（远端摘要已变更）", j.reference)
 			_ = s.store.CreateNotification(&models.Notification{
-				ImageID:    img.ID,
-				ImageName:  ref.Repo,
-				Reference:  j.reference,
-				OldDigest:  prevRemote,
-				NewDigest:  remote,
-				OldTag:     ref.Tag,
-				NewTag:     ref.Tag,
-				Type:       models.NotifUpdate,
-				Message:    msg,
+				ImageID:   img.ID,
+				ImageName: ref.Repo,
+				Reference: j.reference,
+				OldDigest: old,
+				NewDigest: remote,
+				OldTag:    ref.Tag,
+				NewTag:    ref.Tag,
+				Type:      models.NotifUpdate,
+				Message:   msg,
 			})
-
-			// 钉钉通知
 			if webhook := s.settings.Snapshot().DingTalkWebhook; webhook != "" {
 				secret := s.settings.Snapshot().DingTalkSecret
-				go func() {
-					if err := notification.NotifyUpdate(webhook, secret, j.reference, prevRemote, remote); err != nil {
-						log.Printf("dingtalk notify failed for %s: %v", j.reference, err)
+				go func(ref, oldD, newD string) {
+					if err := notification.NotifyUpdate(webhook, secret, ref, oldD, newD); err != nil {
+						log.Printf("dingtalk notify failed for %s: %v", ref, err)
 					}
-				}()
+				}(j.reference, old, remote)
 			}
 			found = true
 		}
 	}
 
-	// 弱提醒：仓库出现比当前固定 tag 更高的独立版本（如 mysql:8.4.7 → 26）。
-	// 仅对非滚动 tag 探测，且受 ignored 抑制、按目标去重，避免刷屏。
-	if s.maybeNotifyNewerTag(ctx, img, existing) {
-		found = true
+	// Pin-Watch 模式：巡检仓库 tag 列表，发现从未见过的新版本 tag → 弱提醒。
+	if rerr == nil && effective == models.ModePinWatch {
+		if s.inspectTags(ctx, img) {
+			found = true
+		}
 	}
 
 	return found, nil
 }
 
-// maybeNotifyNewerTag 探测仓库是否出现比当前固定 tag 更高的新版本。
-// 是则生成一条 type=new-tag 的弱提醒（系统内 + 钉钉弱提醒），并记录去重目标。
-// 返回是否产生了提醒。
-func (s *Scanner) maybeNotifyNewerTag(ctx context.Context, img *models.Image, existing *models.Image) bool {
+// inspectTags 巡检仓库标签列表（仅 Pin-Watch 模式）：
+//
+//	首次巡检把全部标签记为已见并建立基线（不通知）；
+//	之后出现从未见过的版本 tag → 每个 tag 生成一条 type=new-tag 通知（每个 tag 仅一次），
+//	并把新 tag 记入已见清单；非版本标签也记为已见但不会触发通知。
+func (s *Scanner) inspectTags(ctx context.Context, img *models.Image) bool {
 	if img == nil || img.ID == 0 {
 		return false
 	}
-	// 仅对固定语义版本 tag 探测；latest/lts 等滚动 tag 交给 digest 强更新。
-	if version.IsRollingTag(img.Tag) {
-		return false
-	}
-	// 忽略的镜像不打扰
-	if existing != nil && existing.Ignored {
-		return false
-	}
-
-	ref := registry.ImageRef{Registry: img.Registry, Repo: img.Name, Tag: img.Tag}
-	tags, err := s.reg.ListTags(ctx, ref)
+	tags, err := s.reg.ListTags(ctx, registry.ImageRef{Registry: img.Registry, Repo: img.Name, Tag: img.Tag})
 	if err != nil || len(tags) == 0 {
 		return false
 	}
-	newer := version.NewerAvailable(img.Tag, tags)
-	if newer == "" {
-		return false
+
+	seen, serr := s.store.GetSeenTags(img.ID)
+	if serr != nil {
+		seen = map[string]bool{}
 	}
-	// 去重：同一目标（或更低目标）已弱提醒过则不再重复
-	if existing != nil && existing.NotifiedNewTag == newer {
+
+	// 首次巡检：建立基线，全部记为已见，不打扰
+	if len(seen) == 0 {
+		_ = s.store.AddSeenTags(img.ID, tags)
 		return false
 	}
 
-	msg := fmt.Sprintf("镜像 %s 出现更新的独立版本 %s（当前 %s）", img.Name, newer, img.Tag)
-	_ = s.store.CreateNotification(&models.Notification{
-		ImageID:    img.ID,
-		ImageName:  img.Name,
-		Reference:  img.Reference,
-		OldTag:     img.Tag,
-		NewTag:     newer,
-		Type:       models.NotifNewTag,
-		Message:    msg,
-	})
-	_ = s.store.SetNotifiedNewTag(img.ID, newer)
+	// 收集本次新出现的 tag（含非版本 tag），并筛出版本 tag 用于通知
+	unseen := make([]string, 0, len(tags))
+	var freshVersionTags []string
+	for _, t := range tags {
+		if seen[t] {
+			continue
+		}
+		unseen = append(unseen, t)
+		if _, ok := version.ParseTag(t); ok {
+			freshVersionTags = append(freshVersionTags, t)
+		}
+	}
+	if len(unseen) > 0 {
+		_ = s.store.AddSeenTags(img.ID, unseen)
+	}
+	if len(freshVersionTags) == 0 {
+		return false
+	}
 
-	// 钉钉同步发一条弱提醒（语义上为“可选新版本”，与强更新的强通知区分）
-	if webhook := s.settings.Snapshot().DingTalkWebhook; webhook != "" {
-		secret := s.settings.Snapshot().DingTalkSecret
-		go func() {
-			if err := notification.NotifyNewTag(webhook, secret, img.Reference, img.Tag, newer); err != nil {
-				log.Printf("dingtalk notify-newtag failed for %s: %v", img.Reference, err)
-			}
-		}()
+	webhook := s.settings.Snapshot().DingTalkWebhook
+	secret := s.settings.Snapshot().DingTalkSecret
+	for _, nt := range freshVersionTags {
+		msg := fmt.Sprintf("仓库 %s 发布新版本标签 %s（当前锁定 %s）", img.Name, nt, img.Tag)
+		_ = s.store.CreateNotification(&models.Notification{
+			ImageID:   img.ID,
+			ImageName: img.Name,
+			Reference: img.Reference,
+			OldTag:    img.Tag,
+			NewTag:    nt,
+			Type:      models.NotifNewTag,
+			Message:   msg,
+		})
+		if webhook != "" {
+			go func(ref, cur, newTag string) {
+				if err := notification.NotifyNewTag(webhook, secret, ref, cur, newTag); err != nil {
+					log.Printf("dingtalk notify-newtag failed for %s: %v", ref, err)
+				}
+			}(img.Reference, img.Tag, nt)
+		}
 	}
 	return true
 }
@@ -265,8 +309,9 @@ func computeStatus(local, remote, prevRemote string) (models.ImageStatus, bool) 
 	return status, changed
 }
 
-// Run 执行一次完整扫描。
-func (s *Scanner) Run(ctx context.Context) {
+// Run 执行一次完整扫描。force=true 时为「强制扫描」：对当前所有存在版本差异的
+// 镜像补发 update 通知（按 digest 去重），覆盖 Pin-Watch 锁定 tag 被覆盖等常规不告警的情况。
+func (s *Scanner) Run(ctx context.Context, force bool) {
 	scanID, err := s.store.CreateScan()
 	if err != nil {
 		return
@@ -290,7 +335,7 @@ func (s *Scanner) Run(ctx context.Context) {
 			defer func() { <-sem }()
 			jctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 			defer cancel()
-			uf, perr := s.process(jctx, j)
+			uf, perr := s.process(jctx, j, force)
 			if perr != nil {
 				mu.Lock()
 				checked++

@@ -90,9 +90,16 @@ func migrate(db *sql.DB) error {
 		password_hash TEXT NOT NULL,
 		created_at    TEXT NOT NULL
 	);
+	CREATE TABLE IF NOT EXISTS image_seen_tags (
+		image_id INTEGER NOT NULL,
+		tag      TEXT NOT NULL,
+		seen_at  TEXT NOT NULL,
+		PRIMARY KEY (image_id, tag)
+	);
 	CREATE INDEX IF NOT EXISTS idx_img_ref ON images(reference);
 	CREATE INDEX IF NOT EXISTS idx_ver_img ON image_versions(image_id);
 	CREATE INDEX IF NOT EXISTS idx_notif_read ON notifications(read);
+	CREATE INDEX IF NOT EXISTS idx_seen_img ON image_seen_tags(image_id);
 	`
 	_, err := db.Exec(schema)
 	if err != nil {
@@ -102,6 +109,7 @@ func migrate(db *sql.DB) error {
 	// 通过忽略 duplicate column 错误实现幂等）。
 	_ = addColumnIfMissing(db, "images", "ignored", "INTEGER NOT NULL DEFAULT 0")
 	_ = addColumnIfMissing(db, "images", "notified_new_tag", "TEXT")
+	_ = addColumnIfMissing(db, "images", "mode", "TEXT NOT NULL DEFAULT 'auto'")
 	_ = addColumnIfMissing(db, "notifications", "type", "TEXT NOT NULL DEFAULT 'update'")
 	return nil
 }
@@ -141,14 +149,14 @@ func ns(v sql.NullString) string {
 // GetImageByRef 按引用查找镜像，未找到返回 (nil, nil)。
 func (s *Store) GetImageByRef(ref string) (*models.Image, error) {
 	row := s.db.QueryRow(
-		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,notified_new_tag,created_at
+		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,notified_new_tag,mode,created_at
 		 FROM images WHERE reference=?`, ref)
 	return scanImage(row)
 }
 
 func (s *Store) GetImage(id int64) (*models.Image, error) {
 	row := s.db.QueryRow(
-		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,notified_new_tag,created_at
+		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,notified_new_tag,mode,created_at
 		 FROM images WHERE id=?`, id)
 	return scanImage(row)
 }
@@ -161,28 +169,37 @@ func scanImage(row *sql.Row) (*models.Image, error) {
 		lastCheck, lastUpdate, errMsg, createdAt        sql.NullString
 		ignored                                         int
 		notifiedNewTag                                  sql.NullString
+		mode                                            sql.NullString
 	)
 	if err := row.Scan(&id, &name, &reference, &registry, &tag, &source, &localDigest,
-		&remoteDigest, &status, &lastCheck, &lastUpdate, &errMsg, &ignored, &notifiedNewTag, &createdAt); err != nil {
+		&remoteDigest, &status, &lastCheck, &lastUpdate, &errMsg, &ignored, &notifiedNewTag, &mode, &createdAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
+	m := ns(mode)
+	if m == "" {
+		m = models.ModeAuto
+	}
 	return &models.Image{
 		ID: id, Name: name, Reference: reference, Registry: registry, Tag: tag,
 		Source: source, LocalDigest: localDigest, RemoteDigest: remoteDigest,
-		Status:        models.ImageStatus(status),
-		Ignored:       ignored == 1,
+		Status:         models.ImageStatus(status),
+		Ignored:        ignored == 1,
 		NotifiedNewTag: ns(notifiedNewTag),
-		LastCheck:     parseTime(ns(lastCheck)),
-		LastUpdate:    parseTime(ns(lastUpdate)),
-		Error:         ns(errMsg),
-		CreatedAt:     parseTime(ns(createdAt)).UTC(),
+		Mode:           m,
+		EffectiveMode:  models.ResolveMode(m, tag),
+		LastCheck:      parseTime(ns(lastCheck)),
+		LastUpdate:     parseTime(ns(lastUpdate)),
+		Error:          ns(errMsg),
+		CreatedAt:      parseTime(ns(createdAt)).UTC(),
 	}, nil
 }
 
 // UpsertImage 按 reference 插入或更新镜像记录。
+// 刻意不写 mode / ignored / notified_new_tag 列（防覆盖点）：
+// mode 只能由 SetMode 修改；ignored 只能由 SetIgnored 修改；扫描每轮只更新采集与检测得到的字段。
 func (s *Store) UpsertImage(img *models.Image) error {
 	created := nowStr()
 	if img.CreatedAt.IsZero() {
@@ -204,11 +221,18 @@ func (s *Store) UpsertImage(img *models.Image) error {
 }
 
 func (s *Store) DeleteImage(id int64) error {
+	// 同步清理该镜像的已见标签清单与版本快照，避免遗留
 	_, err := s.db.Exec("DELETE FROM images WHERE id=?", id)
-	return err
+	if err != nil {
+		return err
+	}
+	_, _ = s.db.Exec("DELETE FROM image_seen_tags WHERE image_id=?", id)
+	_, _ = s.db.Exec("DELETE FROM image_versions WHERE image_id=?", id)
+	return nil
 }
 
-// SetIgnored 设置镜像的忽略状态：忽略后仍扫描、状态照常更新，但不再产生系统/钉钉通知。
+// SetIgnored 设置镜像的忽略状态：忽略后跳过全部检测（不校验摘要、不巡检标签），
+// 行数据保持冻结，也不会产生任何通知。
 func (s *Store) SetIgnored(id int64, ignored bool) error {
 	v := 0
 	if ignored {
@@ -218,12 +242,71 @@ func (s *Store) SetIgnored(id int64, ignored bool) error {
 	return err
 }
 
-// SetNotifiedNewTag 记录某镜像已弱提醒过的「更高新版本」目标 tag，用于去重：
-// 只有发现比该记录更新的版本时才再次弱提醒。该列由扫描弱提醒成功时写入，
-// 不会被 UpsertImage 覆盖。
-func (s *Store) SetNotifiedNewTag(id int64, newTag string) error {
-	_, err := s.db.Exec("UPDATE images SET notified_new_tag=? WHERE id=?", newTag, id)
+// SetMode 设置镜像的检测模式覆写（auto / digest-only / pin-watch），仅由此方法写入，
+// 扫描的 UpsertImage 不会覆盖。生效模式由读取时 ResolveMode 计算。
+func (s *Store) SetMode(id int64, mode string) error {
+	_, err := s.db.Exec("UPDATE images SET mode=? WHERE id=?", mode, id)
 	return err
+}
+
+// ---- Seen tags（pin-watch 模式巡检用）----
+
+// GetSeenTags 返回某镜像已见过的仓库标签集合，用于新版本 tag 去重。
+func (s *Store) GetSeenTags(imageID int64) (map[string]bool, error) {
+	rows, err := s.db.Query("SELECT tag FROM image_seen_tags WHERE image_id=?", imageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var tag string
+		if err := rows.Scan(&tag); err != nil {
+			return nil, err
+		}
+		out[tag] = true
+	}
+	return out, rows.Err()
+}
+
+// AddSeenTags 记录标签为已见（幂等，INSERT OR IGNORE）。用于首次巡检建立基线与后续记录新 tag。
+func (s *Store) AddSeenTags(imageID int64, tags []string) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	now := nowStr()
+	stmt, err := tx.Prepare("INSERT OR IGNORE INTO image_seen_tags (image_id,tag,seen_at) VALUES (?,?,?)")
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+	for _, t := range tags {
+		if _, err := stmt.Exec(imageID, t, now); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ---- Notifications ----
+
+// HasDigestNotification 报告某镜像是否已对指定远端摘要发过 type=update 的通知，
+// 用于「同一个 digest 只通知一次」的去重（常规转移通知与强制扫描补发共用此闸门）。
+func (s *Store) HasDigestNotification(imageID int64, digest string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM notifications WHERE image_id=? AND type='update' AND new_digest=?`,
+		imageID, digest).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // MarkDockerImagesMissing 将「source=docker 且当前本机已不再出现」的镜像行标记为 stale（缺失），
@@ -267,7 +350,7 @@ func (s *Store) MarkDockerImagesMissing(liveRefs map[string]bool) (int64, error)
 
 // ListImages 列出镜像，status 为空时返回全部。
 func (s *Store) ListImages(status string) ([]models.Image, error) {
-	q := `SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,notified_new_tag,created_at FROM images`
+	q := `SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,notified_new_tag,mode,created_at FROM images`
 	var rows *sql.Rows
 	var err error
 	if status != "" {
@@ -289,21 +372,28 @@ func (s *Store) ListImages(status string) ([]models.Image, error) {
 			lastCheck, lastUpdate, errMsg, createdAt               sql.NullString
 			ignored                                                  int
 			notifiedNewTag                                          sql.NullString
+			mode                                                    sql.NullString
 		)
 		if err := rows.Scan(&id, &name, &reference, &registry, &tag, &source, &localDigest,
-			&remoteDigest, &st, &lastCheck, &lastUpdate, &errMsg, &ignored, &notifiedNewTag, &createdAt); err != nil {
+			&remoteDigest, &st, &lastCheck, &lastUpdate, &errMsg, &ignored, &notifiedNewTag, &mode, &createdAt); err != nil {
 			return nil, err
+		}
+		m := ns(mode)
+		if m == "" {
+			m = models.ModeAuto
 		}
 		out = append(out, models.Image{
 			ID: id, Name: name, Reference: reference, Registry: registry, Tag: tag,
 			Source: source, LocalDigest: localDigest, RemoteDigest: remoteDigest,
-			Status:        models.ImageStatus(st),
-			Ignored:       ignored == 1,
+			Status:         models.ImageStatus(st),
+			Ignored:        ignored == 1,
 			NotifiedNewTag: ns(notifiedNewTag),
-			LastCheck:     parseTime(ns(lastCheck)),
-			LastUpdate:    parseTime(ns(lastUpdate)),
-			Error:         ns(errMsg),
-			CreatedAt:     parseTime(ns(createdAt)).UTC(),
+			Mode:           m,
+			EffectiveMode:  models.ResolveMode(m, tag),
+			LastCheck:      parseTime(ns(lastCheck)),
+			LastUpdate:     parseTime(ns(lastUpdate)),
+			Error:          ns(errMsg),
+			CreatedAt:      parseTime(ns(createdAt)).UTC(),
 		})
 	}
 	return out, rows.Err()

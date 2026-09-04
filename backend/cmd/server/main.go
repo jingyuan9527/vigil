@@ -68,7 +68,7 @@ func main() {
 	sc := scanner.New(cfg, st, dcli, reg, live)
 
 	// 启动时立即扫描一次
-	go sc.Run(context.Background())
+	go sc.Run(context.Background(), false)
 
 	// 周期扫描：间隔可由页面动态调整，变化时自动重新计时。
 	go func() {
@@ -82,7 +82,7 @@ func main() {
 			ch := live.Changed()
 			select {
 			case <-tm.C:
-				sc.Run(context.Background())
+				sc.Run(context.Background(), false)
 			case <-ch:
 				tm.Stop()
 			}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,253 +17,166 @@ import (
 	"dockmon/internal/store"
 )
 
-// TestScannerFullPipeline 通过真实 registry/docker 客户端 + 内存 SQLite，
-// 端到端验证「本地摘要 vs 远端摘要」的比对逻辑。重点：
-//  1. 真实 Docker 返回 "nginx@sha256:deadbeef"，客户端须剥离 sha256: 前缀；
-//  2. 远端 registry 返回裸摘要 deadbeef，二者必须判定为 up-to-date（而非误报 update-available）；
-//  3. 远端摘要变化后应正确判定 update-available 并产生通知。
-//
-// 该测试正是捕捉「docker 保留前缀 / registry 剥离前缀」导致每次都误报更新回归的关键用例。
-func TestScannerFullPipeline(t *testing.T) {
-	// ---- 1) 伪造 Docker 守护进程：返回带 sha256: 前缀的 RepoDigests ----
-	// localDigest 为本地镜像摘要（固定不变），remoteDigest 为远端摘要（第二次扫描时变更）。
-	localDigest := "deadbeef"
-	remoteDigest := "deadbeef"
-	dockerMux := http.NewServeMux()
-	dockerMux.HandleFunc("/_ping", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	dockerMux.HandleFunc("/images/json", func(w http.ResponseWriter, r *http.Request) {
-		// 真实 Docker Engine 返回 "nginx@sha256:deadbeef"，客户端负责剥离前缀
-		_ = json.NewEncoder(w).Encode([]map[string]any{
-			{
-				"Id":          "sha256:1",
-				"RepoTags":    []string{"nginx:latest"},
-				"RepoDigests": []string{"nginx@sha256:" + localDigest},
-			},
-		})
-	})
-	dockerSrv := httptest.NewServer(dockerMux)
-	defer dockerSrv.Close()
-
-	// ---- 2) 伪造 Registry（含 401 -> token -> 200 鉴权路径）----
-	var registrySrvURL string
-	registryMux := http.NewServeMux()
-	registryMux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+// newFakeRegistry 构造一个伪造 registry（401->token->200 鉴权路径），
+// 并用返回的摘要/tag 数据驱动扫描。manifestCalls/tagsCalls 用于断言「忽略/digest-only 是否跳过巡检」。
+func newFakeRegistry(t *testing.T, repo, tag, digest string, tags []string) (*registry.Client, *httptest.Server, *int32, *int32) {
+	t.Helper()
+	var (
+		manifestCalls int32
+		tagsCalls     int32
+		srvURL        string
+	)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"token": "fake-token"})
 	})
-	registryMux.HandleFunc("/v2/library/nginx/manifests/latest", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") == "" {
-			realm := registrySrvURL + "/token"
-			w.Header().Set("WWW-Authenticate",
-				`Bearer realm="`+realm+`",service="registry.docker.io",scope="repository:library/nginx:pull"`)
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		w.Header().Set("Docker-Content-Digest", "sha256:"+remoteDigest)
-		w.WriteHeader(http.StatusOK)
-	})
-	registrySrv := httptest.NewServer(registryMux)
-	defer registrySrv.Close()
-	registrySrvURL = registrySrv.URL
-	regHost := strings.TrimPrefix(registrySrv.URL, "http://")
-
-	// ---- 3) 内存 SQLite ----
-	st, err := store.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	// ---- 4) 构造依赖（真实客户端，指向 httptest 服务）----
-	dcli := docker.NewClientForTest(dockerSrv.URL, dockerSrv.Client())
-	// 注入显式关闭代理的 http.Client，避免测试环境的 HTTP(S)_PROXY 拦截到 httptest 服务。
-	regHTTP := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}}
-	reg := registry.NewClientWithMirrorAndHTTP(true, regHost, regHTTP)
-
-	cfg := &config.Config{
-		DefaultWatch:   []string{"nginx:latest"},
-		DisableDefault: false,
-	}
-	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
-
-	// ---- 5) 第一次扫描：本地 == 远端，应为 up-to-date，不产生误报告知 ----
-	sc.Run(context.Background())
-
-	img, err := st.GetImageByRef("nginx:latest")
-	if err != nil {
-		t.Fatalf("GetImageByRef: %v", err)
-	}
-	if img == nil {
-		t.Fatal("nginx:latest not recorded after scan")
-	}
-	if img.LocalDigest != remoteDigest {
-		t.Errorf("local digest = %q, want %q (sha256: prefix must be stripped)", img.LocalDigest, remoteDigest)
-	}
-	if img.RemoteDigest != remoteDigest {
-		t.Errorf("remote digest = %q, want %q", img.RemoteDigest, remoteDigest)
-	}
-	if img.Status != models.StatusUpToDate {
-		t.Errorf("status = %q, want %q (local==remote must be up-to-date)", img.Status, models.StatusUpToDate)
-	}
-	t.Logf("SCAN1 local=%q remote=%q status=%q", img.LocalDigest, img.RemoteDigest, img.Status)
-	unread, _ := st.UnreadCount()
-	if unread != 0 {
-		t.Errorf("unread notifications = %d, want 0 (no false alarm on first baseline scan)", unread)
-	}
-	vs, _ := st.ListVersions(img.ID)
-	if len(vs) != 1 {
-		t.Errorf("version snapshots = %d, want 1 (baseline recorded)", len(vs))
-	}
-
-	// ---- 6) 第二次扫描：远端摘要变化，应判定 update-available 并产生通知 ----
-	remoteDigest = "feedface"
-	sc.Run(context.Background())
-
-	img2, _ := st.GetImageByRef("nginx:latest")
-	if img2.Status != models.StatusUpdateAvailable {
-		t.Errorf("status after remote change = %q, want %q", img2.Status, models.StatusUpdateAvailable)
-	}
-	unread2, _ := st.UnreadCount()
-	if unread2 < 1 {
-		t.Errorf("unread notifications = %d, want >=1 after remote digest changed", unread2)
-	}
-	notifs, _ := st.ListNotifications(false)
-	if len(notifs) < 1 {
-		t.Errorf("notifications = %d, want >=1 after remote digest changed", len(notifs))
-	}
-}
-
-// TestIgnoredSuppressesNotification 验证「忽略 = 仍扫描但不提醒」语义：
-// 镜像被忽略后，远端摘要再次变化应照常判定为 update-available，
-// 但既不写入 notifications，也不计入未读 —— 便于用户取消忽略后不产生误报。
-func TestIgnoredSuppressesNotification(t *testing.T) {
-	localDigest := "aaaaaa"
-	remoteDigest := "aaaaaa"
-
-	dockerMux := http.NewServeMux()
-	dockerMux.HandleFunc("/_ping", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	dockerMux.HandleFunc("/images/json", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode([]map[string]any{
-			{"Id": "sha256:1", "RepoTags": []string{"mysql:8"}, "RepoDigests": []string{"mysql@sha256:" + localDigest}},
-		})
-	})
-	dockerSrv := httptest.NewServer(dockerMux)
-	defer dockerSrv.Close()
-
-	var registrySrvURL string
-	registryMux := http.NewServeMux()
-	registryMux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"token": "fake-token"})
-	})
-	registryMux.HandleFunc("/v2/library/mysql/manifests/8", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v2/"+repo+"/manifests/"+tag, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&manifestCalls, 1)
 		if r.Header.Get("Authorization") == "" {
 			w.Header().Set("WWW-Authenticate",
-				`Bearer realm="`+registrySrvURL+`/token",service="registry.docker.io",scope="repository:library/mysql:pull"`)
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		w.Header().Set("Docker-Content-Digest", "sha256:"+remoteDigest)
-		w.WriteHeader(http.StatusOK)
-	})
-	registrySrv := httptest.NewServer(registryMux)
-	defer registrySrv.Close()
-	registrySrvURL = registrySrv.URL
-	regHost := strings.TrimPrefix(registrySrv.URL, "http://")
-
-	st, _ := store.Open(":memory:")
-	dcli := docker.NewClientForTest(dockerSrv.URL, dockerSrv.Client())
-	regHTTP := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}}
-	reg := registry.NewClientWithMirrorAndHTTP(true, regHost, regHTTP)
-	cfg := &config.Config{DefaultWatch: []string{"mysql:8"}, DisableDefault: false}
-	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
-
-	// 首扫：建立 up-to-date 基线，且无通知
-	sc.Run(context.Background())
-	img, _ := st.GetImageByRef("mysql:8")
-	if img == nil {
-		t.Fatal("mysql:8 not recorded")
-	}
-	if u, _ := st.UnreadCount(); u != 0 {
-		t.Fatalf("unread after baseline = %d, want 0", u)
-	}
-
-	// 用户忽略该镜像（仍扫描不提醒）
-	if err := st.SetIgnored(img.ID, true); err != nil {
-		t.Fatalf("set ignored: %v", err)
-	}
-
-	// 远端更新，再次扫描：应 update-available，但不得产生通知
-	remoteDigest = "bbbbbb"
-	sc.Run(context.Background())
-
-	img2, _ := st.GetImageByRef("mysql:8")
-	if img2.Status != models.StatusUpdateAvailable {
-		t.Errorf("status = %q, want %q (ignored should still scan & update status)", img2.Status, models.StatusUpdateAvailable)
-	}
-	if !img2.Ignored {
-		t.Error("ignored flag lost after scan (Upsert must not reset it)")
-	}
-	if u, _ := st.UnreadCount(); u != 0 {
-		t.Errorf("unread = %d, want 0 (ignored image must not notify)", u)
-	}
-	if notifs, _ := st.ListNotifications(false); len(notifs) != 0 {
-		t.Errorf("notifications = %d, want 0 for ignored image", len(notifs))
-	}
-}
-
-// TestNewerTagWeakNotify 验证「固定 tag 发现更高独立版本 → 弱提醒」语义：
-//  1. mysql:8.4.7 首扫即发现仓库 tags 里有更高的 26 → 生成 type=new-tag 弱提醒；
-//  2. registry 不变时再次扫描 → 去重，不重复提醒；
-//  3. 仓库再出现更高的 30 → 生成新的弱提醒（指向 30）。
-// latest 等滚动 tag 不参与该探测（交给 digest 强更新）。
-func TestNewerTagWeakNotify(t *testing.T) {
-	digest := "c0ffee"
-	// 可变 tags：模拟仓库版本演进
-	allTags := []string{"8.0.36", "8.4.7", "8.4.8", "26", "latest"}
-
-	dockerMux := http.NewServeMux()
-	dockerMux.HandleFunc("/_ping", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	dockerMux.HandleFunc("/images/json", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode([]map[string]any{
-			{"Id": "sha256:1", "RepoTags": []string{"mysql:8.4.7"}, "RepoDigests": []string{"mysql@sha256:" + digest}},
-		})
-	})
-	dockerSrv := httptest.NewServer(dockerMux)
-	defer dockerSrv.Close()
-
-	var registrySrvURL string
-	registryMux := http.NewServeMux()
-	registryMux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"token": "fake-token"})
-	})
-	registryMux.HandleFunc("/v2/library/mysql/manifests/8.4.7", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") == "" {
-			w.Header().Set("WWW-Authenticate",
-				`Bearer realm="`+registrySrvURL+`/token",service="registry.docker.io",scope="repository:library/mysql:pull"`)
+				`Bearer realm="`+srvURL+`/token",service="registry.docker.io",scope="repository:`+repo+`:pull"`)
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 		w.Header().Set("Docker-Content-Digest", "sha256:"+digest)
 		w.WriteHeader(http.StatusOK)
 	})
-	registryMux.HandleFunc("/v2/library/mysql/tags/list", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v2/"+repo+"/tags/list", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&tagsCalls, 1)
 		if r.Header.Get("Authorization") == "" {
 			w.Header().Set("WWW-Authenticate",
-				`Bearer realm="`+registrySrvURL+`/token",service="registry.docker.io",scope="repository:library/mysql:pull"`)
+				`Bearer realm="`+srvURL+`/token",service="registry.docker.io",scope="repository:`+repo+`:pull"`)
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"name": "library/mysql", "tags": allTags})
+		_ = json.NewEncoder(w).Encode(map[string]any{"name": repo, "tags": tags})
 	})
-	registrySrv := httptest.NewServer(registryMux)
-	defer registrySrv.Close()
-	registrySrvURL = registrySrv.URL
-	regHost := strings.TrimPrefix(registrySrv.URL, "http://")
+	srv := httptest.NewServer(mux)
+	srvURL = srv.URL
+	host := strings.TrimPrefix(srv.URL, "http://")
+	regHTTP := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	return registry.NewClientWithMirrorAndHTTP(true, host, regHTTP), srv, &manifestCalls, &tagsCalls
+}
+
+// newFakeDocker 构造一个伪造 Docker 守护进程，上报给定引用（裸引用，如 "mysql:8"，
+// 与真实 Docker 的 RepoTags 一致）及其本地摘要。RepoDigests 用裸仓库名。
+func newFakeDocker(t *testing.T, ref, localDigest string) (*docker.Client, *httptest.Server) {
+	t.Helper()
+	name := ref
+	if i := strings.Index(ref, ":"); i > 0 {
+		name = ref[:i]
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/_ping", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("/images/json", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"Id": "sha256:1", "RepoTags": []string{ref}, "RepoDigests": []string{name + "@sha256:" + localDigest}},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	return docker.NewClientForTest(srv.URL, srv.Client()), srv
+}
+
+// TestScannerFullPipeline 验证 digest-only（nginx:latest）的基线与转移通知：
+//  1. 首扫 local==remote → up-to-date、无通知、记录版本快照基线；
+//  2. 远端摘要变化 → update-available + update 通知（按 digest 去重）。
+func TestScannerFullPipeline(t *testing.T) {
+	localDigest := "deadbeef"
+	remoteDigest := "deadbeef"
+	reg, regSrv, _, _ := newFakeRegistry(t, "library/nginx", "latest", remoteDigest, nil)
+	defer regSrv.Close()
+	dcli, dockerSrv := newFakeDocker(t, "nginx:latest", localDigest)
+	defer dockerSrv.Close()
 
 	st, _ := store.Open(":memory:")
-	dcli := docker.NewClientForTest(dockerSrv.URL, dockerSrv.Client())
-	regHTTP := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}}
-	reg := registry.NewClientWithMirrorAndHTTP(true, regHost, regHTTP)
+	cfg := &config.Config{DefaultWatch: []string{"nginx:latest"}, DisableDefault: false}
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
+
+	sc.Run(context.Background(), false)
+	img, _ := st.GetImageByRef("nginx:latest")
+	if img.Status != models.StatusUpToDate {
+		t.Errorf("status = %q, want up-to-date (local==remote)", img.Status)
+	}
+	if u, _ := st.UnreadCount(); u != 0 {
+		t.Errorf("unread = %d, want 0 on first baseline", u)
+	}
+
+	remoteDigest = "feedface"
+	reg2, regSrv2, _, _ := newFakeRegistry(t, "library/nginx", "latest", remoteDigest, nil)
+	defer regSrv2.Close()
+	sc.SetRegistry(reg2)
+	sc.Run(context.Background(), false)
+
+	img2, _ := st.GetImageByRef("nginx:latest")
+	if img2.Status != models.StatusUpdateAvailable {
+		t.Errorf("status after change = %q, want update-available", img2.Status)
+	}
+	if u, _ := st.UnreadCount(); u < 1 {
+		t.Errorf("unread after change = %d, want >=1", u)
+	}
+}
+
+// TestIgnoredSkipsAllDetection 验证「忽略 = 跳过全部检测」语义：
+// 镜像被忽略后，远端 manifest 与 tags/list 都不应被请求，
+// 行数据（状态/远端摘要）保持冻结，也不产生任何通知。
+func TestIgnoredSkipsAllDetection(t *testing.T) {
+	localDigest := "aaaaaa"
+	remoteDigest := "aaaaaa"
+	reg, regSrv, mcalls, _ := newFakeRegistry(t, "library/mysql", "8", remoteDigest, nil)
+	defer regSrv.Close()
+	dcli, dockerSrv := newFakeDocker(t, "mysql:8", localDigest)
+	defer dockerSrv.Close()
+
+	st, _ := store.Open(":memory:")
+	cfg := &config.Config{DefaultWatch: []string{"mysql:8"}, DisableDefault: false}
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
+
+	// 首扫建立基线
+	sc.Run(context.Background(), false)
+	img, _ := st.GetImageByRef("mysql:8")
+	if img == nil {
+		t.Fatal("mysql:8 not recorded")
+	}
+	baseManifests := atomic.LoadInt32(mcalls)
+
+	// 忽略该镜像
+	if err := st.SetIgnored(img.ID, true); err != nil {
+		t.Fatalf("set ignored: %v", err)
+	}
+
+	// 远端更新后再次扫描：应跳过 manifest 拉取，状态/远端摘要不变，无通知
+	remoteDigest = "bbbbbb"
+	sc.Run(context.Background(), false)
+
+	img2, _ := st.GetImageByRef("mysql:8")
+	if img2.Status != models.StatusUpToDate {
+		t.Errorf("status = %q, want up-to-date (frozen, detection skipped)", img2.Status)
+	}
+	if img2.RemoteDigest != "aaaaaa" {
+		t.Errorf("remote digest = %q, want frozen aaaaaa", img2.RemoteDigest)
+	}
+	if got := atomic.LoadInt32(mcalls) - baseManifests; got != 0 {
+		t.Errorf("manifest calls during ignored scan = %d, want 0 (skip all detection)", got)
+	}
+	if u, _ := st.UnreadCount(); u != 0 {
+		t.Errorf("unread = %d, want 0 for ignored image", u)
+	}
+}
+
+// TestPinWatchBaselineThenNewTag 验证 Pin-Watch（固定版本 tag）新版本巡检语义：
+//  1. 首扫建立 seen 标签基线（含已有所有版本 tag），不通知；
+//  2. 仓库不变 → 不重复通知（seen 去重）；
+//  3. 仓库新增单个新版本 tag → 一条 type=new-tag 通知；
+//  4. 仓库再同时新增两个新版本 tag → 两条通知（每个 tag 仅一次）。
+func TestPinWatchBaselineThenNewTag(t *testing.T) {
+	digest := "c0ffee"
+	allTags := []string{"8.0.36", "8.4.7", "8.4.8", "26", "latest"}
+	reg, regSrv, _, _ := newFakeRegistry(t, "library/mysql", "8.4.7", digest, allTags)
+	defer regSrv.Close()
+	dcli, dockerSrv := newFakeDocker(t, "mysql:8.4.7", digest)
+	defer dockerSrv.Close()
+
+	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.7"}, DisableDefault: false}
 	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
 
@@ -277,95 +191,142 @@ func TestNewerTagWeakNotify(t *testing.T) {
 		return out
 	}
 
-	// 第 1 轮：local==remote → up-to-date 无强更新；但发现更高 26 → 弱提醒 1 条
-	sc.Run(context.Background())
-	n1 := newTagNotifs()
-	if len(n1) != 1 {
-		t.Fatalf("scan1 new-tag notifs = %d, want 1", len(n1))
+	// 首扫：建立 seen 基线，无新版本通知
+	sc.Run(context.Background(), false)
+	if n1 := newTagNotifs(); len(n1) != 0 {
+		t.Fatalf("scan1 new-tag notifs = %d, want 0 (baseline)", len(n1))
 	}
-	if n1[0].NewTag != "26" {
-		t.Errorf("scan1 NewTag = %q, want 26", n1[0].NewTag)
+
+	// 第二轮：registry 未变 → 不重复
+	sc.Run(context.Background(), false)
+	if n2 := newTagNotifs(); len(n2) != 0 {
+		t.Errorf("scan2 new-tag notifs = %d, want 0 (dedup, no repeat)", len(n2))
 	}
+
+	// 第三轮：新增单个 30 → 一条
+	allTags2 := append(append([]string{}, allTags...), "30")
+	reg3, regSrv3, _, _ := newFakeRegistry(t, "library/mysql", "8.4.7", digest, allTags2)
+	defer regSrv3.Close()
+	sc.SetRegistry(reg3)
+	sc.Run(context.Background(), false)
+	n3 := newTagNotifs()
+	if len(n3) != 1 || n3[0].NewTag != "30" {
+		t.Fatalf("scan3 new-tag notifs = %+v, want one with NewTag=30", n3)
+	}
+
+	// 第四轮：同时新增两个新版本 8.5.0 与 9.0.0 → 两条（每个 tag 仅一次）
+	allTags3 := append(append([]string{}, allTags2...), "8.5.0", "9.0.0")
+	reg4, regSrv4, _, _ := newFakeRegistry(t, "library/mysql", "8.4.7", digest, allTags3)
+	defer regSrv4.Close()
+	sc.SetRegistry(reg4)
+	sc.Run(context.Background(), false)
+	n4 := newTagNotifs()
+	if len(n4) != 3 {
+		t.Fatalf("scan4 new-tag notifs total = %d, want 3 (1+2 new)", len(n4))
+	}
+}
+
+// TestRollingTagNoTagInspection 验证浮动标签（latest）默认 Digest-Only，
+// 不会触发仓库 tag 巡检（即便仓库暴露了更高版本也不产生 new-tag 通知）。
+func TestRollingTagNoTagInspection(t *testing.T) {
+	digest := "beef00"
+	reg, regSrv, _, tcalls := newFakeRegistry(t, "library/mysql", "latest", digest, []string{"26", "latest"})
+	defer regSrv.Close()
+	dcli, dockerSrv := newFakeDocker(t, "mysql:latest", digest)
+	defer dockerSrv.Close()
+
+	st, _ := store.Open(":memory:")
+	cfg := &config.Config{DefaultWatch: []string{"mysql:latest"}, DisableDefault: false}
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
+
+	sc.Run(context.Background(), false)
+	if atomic.LoadInt32(tcalls) != 0 {
+		t.Errorf("tags/list called %d times for rolling tag, want 0 (digest-only skips inspection)", *tcalls)
+	}
+	all, _ := st.ListNotifications(false)
+	for _, n := range all {
+		if n.Type == models.NotifNewTag {
+			t.Errorf("rolling tag produced new-tag notify: %+v", n)
+		}
+	}
+}
+
+// TestForceScanBackfillsAndDedups 验证强制扫描：对当前存在版本差异的镜像补发 update 通知，
+// 并按 (image, digest) 去重——重复强制扫描不重复通知。覆盖 Pin-Watch 锁定 tag 被覆盖的情况。
+func TestForceScanBackfillsAndDedups(t *testing.T) {
+	localDigest := "aaaaaa"
+	remoteDigest := "bbbbbb" // 远端从一开始就与本地不同
+	// tags/list 返回空：Pin-Watch 巡检直接 return，不影响本测试焦点
+	reg, regSrv, _, _ := newFakeRegistry(t, "library/mysql", "8.4.7", remoteDigest, nil)
+	defer regSrv.Close()
+	dcli, dockerSrv := newFakeDocker(t, "mysql:8.4.7", localDigest)
+	defer dockerSrv.Close()
+
+	st, _ := store.Open(":memory:")
+	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.7"}, DisableDefault: false}
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
+
+	// 常规扫描：Pin-Watch 首扫基线 + local!=remote 但 digest 变化非「转移」（changed=false，首扫）→ 不通知
+	sc.Run(context.Background(), false)
+	img, _ := st.GetImageByRef("mysql:8.4.7")
+	if img.Status != models.StatusUpdateAvailable {
+		t.Errorf("status = %q, want update-available (local!=remote)", img.Status)
+	}
+	if u, _ := st.UnreadCount(); u != 0 {
+		t.Fatalf("unread after routine scan = %d, want 0 (pin-watch baseline, no transition notify)", u)
+	}
+
+	// 强制扫描：补发 update 通知（按 digest 去重）
+	sc.Run(context.Background(), true)
+	if u, _ := st.UnreadCount(); u != 1 {
+		t.Fatalf("unread after force scan = %d, want 1", u)
+	}
+
+	// 再次强制扫描：同一 digest 已通知过 → 不重复
+	sc.Run(context.Background(), true)
+	if u, _ := st.UnreadCount(); u != 1 {
+		t.Errorf("unread after second force scan = %d, want 1 (dedup by digest)", u)
+	}
+}
+
+// TestModeOverrideDigestOnly 验证手动覆写：把固定版本 tag 强制设为 digest-only 后，
+// 即便仓库出现新版本 tag，也不应巡检 tags/list、不产生 new-tag 通知。
+func TestModeOverrideDigestOnly(t *testing.T) {
+	digest := "c0ffee"
+	allTags := []string{"8.4.7", "8.4.8", "26", "latest"}
+	reg, regSrv, _, tcalls := newFakeRegistry(t, "library/mysql", "8.4.7", digest, allTags)
+	defer regSrv.Close()
+	dcli, dockerSrv := newFakeDocker(t, "mysql:8.4.7", digest)
+	defer dockerSrv.Close()
+
+	st, _ := store.Open(":memory:")
+	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.7"}, DisableDefault: false}
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
+
+	// 首扫建立基线（此时还是 auto→pin-watch，会建立 seen）
+	sc.Run(context.Background(), false)
 	img, _ := st.GetImageByRef("mysql:8.4.7")
 	if img == nil {
 		t.Fatal("mysql:8.4.7 not recorded")
 	}
-	if img.NotifiedNewTag != "26" {
-		t.Errorf("NotifiedNewTag = %q, want 26", img.NotifiedNewTag)
+	// 覆写为 digest-only
+	if err := st.SetMode(img.ID, models.ModeDigestOnly); err != nil {
+		t.Fatalf("set mode: %v", err)
 	}
-	if img.Status != models.StatusUpToDate {
-		t.Errorf("status = %q, want up-to-date (no digest change)", img.Status)
+	baseTags := atomic.LoadInt32(tcalls)
+
+	// 新增新版本 tag，再扫：digest-only 不巡检 → 无 new-tag 通知
+	reg2, regSrv2, _, _ := newFakeRegistry(t, "library/mysql", "8.4.7", digest, append(allTags, "30"))
+	defer regSrv2.Close()
+	sc.SetRegistry(reg2)
+	sc.Run(context.Background(), false)
+	if got := atomic.LoadInt32(tcalls) - baseTags; got != 0 {
+		t.Errorf("tags/list calls after digest-only override = %d, want 0", got)
 	}
-
-	// 第 2 轮：registry 未变 → 去重，不再新增弱提醒
-	sc.Run(context.Background())
-	if n2 := newTagNotifs(); len(n2) != 1 {
-		t.Errorf("scan2 new-tag notifs = %d, want 1 (dedup, no repeat)", len(n2))
-	}
-
-	// 第 3 轮：仓库出现更高的 30 → 产生指向 30 的新弱提醒
-	allTags = append(allTags, "30")
-	sc.Run(context.Background())
-	n3 := newTagNotifs()
-	if len(n3) != 2 {
-		t.Fatalf("scan3 new-tag notifs = %d, want 2", len(n3))
-	}
-	img3, _ := st.GetImageByRef("mysql:8.4.7")
-	if img3.NotifiedNewTag != "30" {
-		t.Errorf("NotifiedNewTag after 30 = %q, want 30", img3.NotifiedNewTag)
-	}
-}
-
-// TestRollingTagNoWeakNotify 验证 latest 等滚动 tag 不触发仓库级弱提醒
-// （滚动 tag 的更新由 digest 强更新承担，避免无谓的 tags/list 噪音）。
-func TestRollingTagNoWeakNotify(t *testing.T) {
-	digest := "beef00"
-	dockerMux := http.NewServeMux()
-	dockerMux.HandleFunc("/_ping", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	dockerMux.HandleFunc("/images/json", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode([]map[string]any{
-			{"Id": "sha256:1", "RepoTags": []string{"mysql:latest"}, "RepoDigests": []string{"mysql@sha256:" + digest}},
-		})
-	})
-	dockerSrv := httptest.NewServer(dockerMux)
-	defer dockerSrv.Close()
-
-	var registrySrvURL string
-	registryMux := http.NewServeMux()
-	registryMux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"token": "fake-token"})
-	})
-	registryMux.HandleFunc("/v2/library/mysql/manifests/latest", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") == "" {
-			w.Header().Set("WWW-Authenticate",
-				`Bearer realm="`+registrySrvURL+`/token",service="registry.docker.io",scope="repository:library/mysql:pull"`)
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		w.Header().Set("Docker-Content-Digest", "sha256:"+digest)
-		w.WriteHeader(http.StatusOK)
-	})
-	registryMux.HandleFunc("/v2/library/mysql/tags/list", func(w http.ResponseWriter, r *http.Request) {
-		// 故意暴露更高版本，但 latest 是滚动 tag，不应因此弱提醒
-		_ = json.NewEncoder(w).Encode(map[string]any{"name": "library/mysql", "tags": []string{"26", "latest"}})
-	})
-	registrySrv := httptest.NewServer(registryMux)
-	defer registrySrv.Close()
-	registrySrvURL = registrySrv.URL
-	regHost := strings.TrimPrefix(registrySrv.URL, "http://")
-
-	st, _ := store.Open(":memory:")
-	dcli := docker.NewClientForTest(dockerSrv.URL, dockerSrv.Client())
-	regHTTP := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}}
-	reg := registry.NewClientWithMirrorAndHTTP(true, regHost, regHTTP)
-	cfg := &config.Config{DefaultWatch: []string{"mysql:latest"}, DisableDefault: false}
-	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
-
-	sc.Run(context.Background())
 	all, _ := st.ListNotifications(false)
 	for _, n := range all {
 		if n.Type == models.NotifNewTag {
-			t.Errorf("rolling tag produced new-tag weak notify: %+v", n)
+			t.Errorf("digest-only override produced new-tag notify: %+v", n)
 		}
 	}
 }

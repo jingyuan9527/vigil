@@ -76,15 +76,28 @@ export const api = {
   image: (id) => getJSON('/images/' + id),
   scans: () => getJSON('/scans'),
   notifications: (unread) => getJSON('/notifications' + (unread ? '?unread=1' : '')),
-  scanNow: () => postJSON('/scan'),
+  scanNow: (force) => postJSON('/scan' + (force ? '?force=1' : '')),
   settings: () => getJSON('/settings'),
   saveSettings: (s) => putJSON('/settings', s),
   testDingTalk: (webhook, secret) => postJSON('/dingtalk/test', { webhook, secret }),
   addImage: (reference) => postJSON('/images', { reference }),
   removeImage: (id) => del('/images/' + id),
   setIgnored: (id, ignored) => putJSON(`/images/${id}/ignored`, { ignored }),
+  setMode: (id, mode) => putJSON(`/images/${id}/mode`, { mode }),
   markRead: (id) => postJSON('/notifications/' + id + '/read'),
   markAllRead: () => postJSON('/notifications/read-all'),
+}
+
+// 检测模式标签（用于镜像卡/对比详情展示）
+export function modeLabel(mode) {
+  switch (mode) {
+    case 'digest-only':
+      return '仅摘要检测'
+    case 'pin-watch':
+      return '锁定+新标签监视'
+    default:
+      return '自动'
+  }
 }
 
 // 短摘要：sha256:abcd...1234 -> abcd…1234

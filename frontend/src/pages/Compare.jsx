@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api, fmtTime, shortDigest } from '../api/client'
+import { api, fmtTime, modeLabel, shortDigest } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import StatusBadge from '../components/StatusBadge'
 import Spinner from '../components/Spinner'
@@ -222,6 +222,7 @@ export default function Compare() {
                 <span>最近检查：{fmtTime(detail.image.last_check)}</span>
                 <span>远端变更：{fmtTime(detail.image.last_update)}</span>
                 <span>来源：{detail.image.source === 'docker' ? 'Docker 守护进程' : '手动监控'}</span>
+                <span>检测模式：{modeLabel(detail.image.effective_mode)}{detail.image.mode && detail.image.mode !== 'auto' ? `（手动覆写）` : '（自动）'}</span>
               </div>
               {/* 分隔列（divide-x），不包子卡片（规则 G：禁止嵌套卡片） */}
               <div className="mt-4 flex flex-col gap-4 border-t border-zinc-100 pt-4 sm:flex-row sm:gap-0 sm:divide-x sm:divide-zinc-100 dark:border-zinc-800 dark:sm:divide-zinc-800">

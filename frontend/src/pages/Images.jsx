@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, fmtTime, shortDigest } from '../api/client'
+import { api, fmtTime, modeLabel, shortDigest } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import StatusBadge from '../components/StatusBadge'
 import Spinner from '../components/Spinner'
@@ -117,14 +117,26 @@ export default function Images() {
     }
   }
 
-  // 忽略 = 仍扫描但不提醒（B 语义）。忽略后状态照常更新，只是不再产生系统/钉钉通知。
+  // 忽略 = 跳过全部检测（不校验摘要、不巡检标签），行数据冻结，也不产生通知。
   const onToggleIgnore = async (img) => {
     try {
       await api.setIgnored(img.id, !img.ignored)
       await load()
-      toast('success', img.ignored ? '已恢复该镜像的更新提醒' : '已忽略该镜像的更新提醒')
+      toast('success', img.ignored ? '已恢复该镜像的更新检测' : '已忽略该镜像（跳过全部检测）')
     } catch {
       toast('error', '操作失败，请重试')
+    }
+  }
+
+  // 设置检测模式覆写（auto/digest-only/pin-watch）
+  const onSetMode = async (img, mode) => {
+    if (mode === (img.mode || 'auto')) return
+    try {
+      await api.setMode(img.id, mode)
+      await load()
+      toast('success', '检测模式已更新，下次扫描生效')
+    } catch {
+      toast('error', '更新失败，请重试')
     }
   }
 
@@ -258,9 +270,25 @@ export default function Images() {
 
               {img.ignored && (
                 <div className="mt-2 rounded-lg bg-zinc-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-zinc-500 dark:bg-zinc-800/60 dark:text-zinc-400">
-                  已忽略更新提醒：仍会扫描并记录状态，但不再发送系统 / 钉钉通知。
+                  已忽略：跳过全部检测（不校验摘要、不巡检标签），也不产生任何通知。
                 </div>
               )}
+
+              {/* 检测模式覆写 */}
+              <div className="mt-3 flex items-center gap-2">
+                <span className="shrink-0 text-[11px] text-zinc-400">检测模式</span>
+                <select
+                  value={img.mode || 'auto'}
+                  disabled={img.ignored}
+                  onChange={(e) => onSetMode(img, e.target.value)}
+                  title={img.ignored ? '已忽略的镜像不执行检测' : '选择检测模式'}
+                  className="min-w-0 flex-1 truncate rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:border-zinc-300 focus:border-bento-accent focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                >
+                  <option value="auto">自动（生效：{modeLabel(img.effective_mode)}）</option>
+                  <option value="digest-only">仅摘要检测</option>
+                  <option value="pin-watch">锁定+新标签监视</option>
+                </select>
+              </div>
 
               <div className="mt-4 space-y-1.5 text-xs">
                 <DigestRow label="本地" value={shortDigest(img.local_digest)} />

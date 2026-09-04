@@ -210,3 +210,77 @@ func TestMarkDockerImagesMissing(t *testing.T) {
 		t.Errorf("marked with empty liveRefs = %d, want 0", n2)
 	}
 }
+
+// TestSeenTagsAndMode 验证 seen 标签清单 CRUD 与检测模式覆写持久化，
+// 以及通知按 digest 去重（HasDigestNotification）。
+func TestSeenTagsAndMode(t *testing.T) {
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	img := &models.Image{Name: "library/mysql", Reference: "mysql:8.4.5", Tag: "8.4.5",
+		Source: "docker", Registry: "registry-1.docker.io", CreatedAt: time.Now()}
+	if err := s.UpsertImage(img); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, _ := s.GetImageByRef("mysql:8.4.5")
+
+	// seen 清单：首次为空，建立基线后再读回应包含全部
+	if seen, _ := s.GetSeenTags(got.ID); len(seen) != 0 {
+		t.Fatalf("initial seen = %d, want 0", len(seen))
+	}
+	if err := s.AddSeenTags(got.ID, []string{"8.4.5", "8.4.6", "8.5.0"}); err != nil {
+		t.Fatalf("add seen: %v", err)
+	}
+	seen, _ := s.GetSeenTags(got.ID)
+	if len(seen) != 3 || !seen["8.5.0"] {
+		t.Errorf("seen after add = %+v, want 3 incl 8.5.0", seen)
+	}
+	// 幂等：重复添加不翻倍
+	_ = s.AddSeenTags(got.ID, []string{"8.4.5", "9.0.0"})
+	if seen2, _ := s.GetSeenTags(got.ID); len(seen2) != 4 {
+		t.Errorf("seen after re-add = %d, want 4 (idempotent)", len(seen2))
+	}
+
+	// 模式覆写持久化且不被扫描的 Upsert 覆盖
+	if err := s.SetMode(got.ID, models.ModePinWatch); err != nil {
+		t.Fatalf("set mode: %v", err)
+	}
+	got2, _ := s.GetImageByRef("mysql:8.4.5")
+	if got2.Mode != models.ModePinWatch || got2.EffectiveMode != models.ModePinWatch {
+		t.Errorf("mode = %q / effective = %q, want pin-watch", got2.Mode, got2.EffectiveMode)
+	}
+	// 扫描触发的 Upsert（更新 remote/status）不应重置 mode
+	got2.RemoteDigest = "sha256:zzz"
+	got2.Status = models.StatusUpdateAvailable
+	if err := s.UpsertImage(got2); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	got3, _ := s.GetImageByRef("mysql:8.4.5")
+	if got3.Mode != models.ModePinWatch {
+		t.Errorf("mode reset after Upsert = %q, want pin-watch (must not be overwritten)", got3.Mode)
+	}
+
+	// HasDigestNotification：按 (image, digest) 去重
+	has, _ := s.HasDigestNotification(got.ID, "sha256:zzz")
+	if has {
+		t.Fatal("HasDigestNotification before any notif = true, want false")
+	}
+	_ = s.CreateNotification(&models.Notification{ImageID: got.ID, NewDigest: "sha256:zzz", Type: models.NotifUpdate, Message: "x"})
+	has2, _ := s.HasDigestNotification(got.ID, "sha256:zzz")
+	if !has2 {
+		t.Error("HasDigestNotification after insert = false, want true")
+	}
+	has3, _ := s.HasDigestNotification(got.ID, "sha256:other")
+	if has3 {
+		t.Error("HasDigestNotification for other digest = true, want false")
+	}
+
+	// DeleteImage 应清理 seen 清单
+	if err := s.DeleteImage(got.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if seen3, _ := s.GetSeenTags(got.ID); len(seen3) != 0 {
+		t.Errorf("seen after delete = %d, want 0 (cleaned up)", len(seen3))
+	}
+}

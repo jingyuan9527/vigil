@@ -241,7 +241,7 @@ func (a *api) handleImages(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		go a.scanner.Run(context.Background())
+		go a.scanner.Run(context.Background(), false)
 		writeJSON(w, http.StatusAccepted, map[string]string{"result": "queued", "reference": ref})
 	default:
 		methodNotAllowed(w)
@@ -271,6 +271,29 @@ func (a *api) handleImageByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"ignored": body.Ignored})
+		return
+	}
+
+	// 子资源：PUT /api/images/{id}/mode  设置检测模式覆写（auto/digest-only/pin-watch）
+	if len(parts) >= 2 && parts[1] == "mode" && r.Method == http.MethodPut {
+		var body struct {
+			Mode string `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+			return
+		}
+		switch body.Mode {
+		case models.ModeAuto, models.ModeDigestOnly, models.ModePinWatch:
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid mode, must be auto / digest-only / pin-watch"})
+			return
+		}
+		if err := a.store.SetMode(id, body.Mode); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"mode": body.Mode})
 		return
 	}
 
@@ -310,8 +333,9 @@ func (a *api) scan(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	go a.scanner.Run(context.Background())
-	writeJSON(w, http.StatusAccepted, map[string]string{"result": "scan started"})
+	force := r.URL.Query().Get("force") == "1"
+	go a.scanner.Run(context.Background(), force)
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{"result": "scan started", "force": force})
 }
 
 // handleSettings 提供运行时设置的读取与持久化更新。
