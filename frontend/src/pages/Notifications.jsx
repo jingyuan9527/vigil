@@ -123,8 +123,8 @@ export default function Notifications() {
   }
 
   return (
-    <div className="notif-list-top space-y-6 overflow-hidden">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+    <div className="notif-list-top flex h-full flex-col overflow-hidden gap-4">
+      <div className="shrink-0 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 md:text-3xl">更新通知</h1>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">按优先级分组的镜像更新提醒，重要更新置顶展示。</p>
@@ -159,7 +159,7 @@ export default function Notifications() {
       </div>
 
       {/* 概览：单行紧凑统计条（密度优先） */}
-      <BentoCard className="flex flex-wrap items-center gap-x-8 gap-y-3">
+      <BentoCard className="shrink-0 flex flex-wrap items-center gap-x-8 gap-y-3">
         {[
           { label: '有新版本', v: grouped[0].list.length, dot: 'bg-amber-500', num: 'text-amber-600 dark:text-amber-400' },
           { label: '可选更新', v: grouped[1].list.length, dot: 'bg-blue-500', num: 'text-blue-600 dark:text-blue-400' },
@@ -175,6 +175,7 @@ export default function Notifications() {
       </BentoCard>
 
       {/* 分组列表：宽屏左右两列（高优先级在左），各组独立折叠 + 分页 */}
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
       {loading ? (
         <Spinner label="加载通知…" />
       ) : !hasAny ? (
@@ -207,6 +208,7 @@ export default function Notifications() {
           ))}
         </div>
       )}
+      </div>
     </div>
   )
 }

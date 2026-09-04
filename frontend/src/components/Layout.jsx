@@ -47,9 +47,9 @@ export default function Layout() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col lg:flex-row">
+    <div className="flex h-dvh flex-col lg:flex-row">
       {/* 桌面侧边栏（仅 lg 显示） */}
-      <aside className="hidden shrink-0 flex-col gap-3 border-r border-zinc-100 bg-white px-5 py-7 dark:border-zinc-800 dark:bg-zinc-900 lg:flex lg:w-64">
+      <aside className="hidden h-dvh shrink-0 flex-col gap-3 border-r border-zinc-100 bg-white px-5 py-7 dark:border-zinc-800 dark:bg-zinc-900 lg:flex lg:w-64">
         <div className="mb-2 flex items-center gap-2.5">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 text-white shadow-bento">
             <ShipIcon />
@@ -141,10 +141,10 @@ export default function Layout() {
       </header>
 
       {/* 主内容 */}
-      <main className="flex-1 overflow-hidden px-4 py-6 pb-24 md:px-6 lg:px-8 lg:py-8 lg:pb-8">
-        <div className="mx-auto max-w-6xl">
+      <main className="min-h-0 flex-1 overflow-hidden px-4 py-5 pb-24 md:px-6 lg:px-8 lg:py-6 lg:pb-6">
+        <div className="mx-auto flex h-full min-h-0 max-w-6xl flex-col">
           {/* 桌面：最近扫描 + 扫描/主题（移动端已在顶栏） */}
-          <div className="mb-6 hidden items-center justify-between gap-3 rounded-2xl border border-zinc-100 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900 lg:flex">
+          <div className="mb-4 shrink-0 hidden items-center justify-between gap-3 rounded-2xl border border-zinc-100 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900 lg:flex">
             <div className="text-xs text-zinc-400 dark:text-zinc-500">
               最近扫描：
               <span className="font-medium text-zinc-600 dark:text-zinc-300">
@@ -177,7 +177,9 @@ export default function Layout() {
             </div>
           </div>
 
-          <Outlet context={{ refreshNotifs: refresh, navigate }} />
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <Outlet context={{ refreshNotifs: refresh, navigate }} />
+          </div>
         </div>
       </main>
 

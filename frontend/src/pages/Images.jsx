@@ -146,7 +146,8 @@ export default function Images() {
   const confirmImg = images.find((i) => i.id === confirmId)
 
   return (
-    <div className="img-list-top space-y-6 overflow-hidden">
+    <div className="img-list-top flex h-full flex-col overflow-hidden gap-4">
+      <div className="shrink-0">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 md:text-3xl">镜像列表</h1>
@@ -164,9 +165,10 @@ export default function Images() {
           </button>
         </form>
       </div>
+      </div>
 
       {/* 筛选 chips（移动端横向滚动）+ 搜索（移动端全宽） */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="shrink-0 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex gap-2.5 overflow-x-auto pb-1 sm:pb-0">
           {FILTERS.map((f) => (
             <button
@@ -190,6 +192,7 @@ export default function Images() {
         />
       </div>
 
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
       {loading ? (
         <Spinner label="加载镜像…" />
       ) : images.length === 0 ? (
@@ -330,6 +333,7 @@ export default function Images() {
           <Pagination page={page} total={total} pageSize={PAGE_SIZE} onChange={goPage} />
         </>
       )}
+      </div>
 
       <ConfirmDialog
         open={confirmId !== null}

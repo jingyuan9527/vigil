@@ -47,12 +47,13 @@ export default function Dashboard() {
   const totalDist = dist.reduce((a, b) => a + b.v, 0) || 1
 
   return (
-    <div className="space-y-6">
-      <div>
+    <div className="flex h-full flex-col">
+      <div className="shrink-0">
         <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 md:text-3xl">仪表盘</h1>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">实时掌握所有被监控镜像的版本状态与更新动态。</p>
       </div>
 
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
       <div className="bento-grid">
         {/* Hero 大卡片 */}
         <BentoCard span="lg" className="bg-gradient-to-br from-blue-500 to-purple-600 text-white">
@@ -174,6 +175,7 @@ export default function Dashboard() {
             浏览镜像列表
           </button>
         </BentoCard>
+      </div>
       </div>
     </div>
   )

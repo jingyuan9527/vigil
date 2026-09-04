@@ -81,13 +81,13 @@ export default function Settings() {
   if (loading || !form) return <Spinner label="加载设置…" />
 
   return (
-    <div className="space-y-6">
-      <div>
+    <div className="flex h-full flex-col gap-4 overflow-hidden">
+      <div className="shrink-0">
         <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 md:text-3xl">设置</h1>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">在页面上调整运行参数，保存后立即生效并持久化（重启后仍保留）。</p>
       </div>
 
-      <form onSubmit={onSave} className="space-y-4">
+      <form onSubmit={onSave} className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
         <div className="bento-grid">
           {/* 扫描间隔 */}
           <BentoCard span="wide">

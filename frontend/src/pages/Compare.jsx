@@ -90,15 +90,15 @@ export default function Compare() {
   const shownVersions = tlOpen ? versions : versions.slice(0, TL_PREVIEW)
 
   return (
-    <div className="space-y-6">
-      <div>
+    <div className="flex h-full flex-col gap-6 overflow-hidden">
+      <div className="shrink-0">
         <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 md:text-3xl">版本对比</h1>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">对比本地与远端镜像摘要，查看版本时间线与可用标签。</p>
       </div>
 
       {/* 移动端选择器：可折叠 wrap chip 网格（<lg），长列表不再横向硬滚 */}
       {!loading && images.length > 0 && (
-        <div className="lg:hidden">
+        <div className="shrink-0 lg:hidden">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-xs text-zinc-400 dark:text-zinc-500">选择镜像（共 {filteredImages.length} 个）</span>
             {images.length > 6 && (
@@ -136,7 +136,7 @@ export default function Compare() {
       )}
 
       {/* 两侧栏限高各自内滚：行轨道显式收缩（1fr），否则行高会按内容撑高并被 overflow-hidden 裁掉 */}
-      <div className="grid gap-6 overflow-hidden lg:h-[calc(100vh-230px)] lg:grid-cols-[280px_1fr] lg:grid-rows-[minmax(0,1fr)]">
+      <div className="min-h-0 flex-1 grid grid-rows-[minmax(0,1fr)] gap-6 overflow-hidden lg:grid-cols-[280px_1fr]">
         {/* 桌面选择器（仅 lg）：搜索 + 状态过滤 + 紧凑行列表（有更新优先） */}
         <div className="hidden min-w-0 flex-col gap-3 lg:flex lg:min-h-0 lg:max-h-full">
           <div className="space-y-2.5">
