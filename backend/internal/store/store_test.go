@@ -153,3 +153,60 @@ func TestIgnored(t *testing.T) {
 		t.Fatal("unignore not applied")
 	}
 }
+
+// TestMarkDockerImagesMissing 验证本机已删除 docker 镜像被标记为 stale，
+// 而仍存活或 manual 来源的行不受影响。
+func TestMarkDockerImagesMissing(t *testing.T) {
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	seed := func(ref string, src string) *models.Image {
+		img := &models.Image{Name: ref, Reference: ref, Source: src,
+			Registry: "registry-1.docker.io", Tag: "latest",
+			Status: models.StatusUpToDate, CreatedAt: time.Now()}
+		if err := s.UpsertImage(img); err != nil {
+			t.Fatalf("seed %s: %v", ref, err)
+		}
+		got, _ := s.GetImageByRef(ref)
+		return got
+	}
+	alive := seed("nginx:latest", "docker")
+	removed := seed("mysql:8", "docker")
+	manual := seed("redis:7", "manual")
+
+	n, err := s.MarkDockerImagesMissing(map[string]bool{"nginx:latest": true, "redis:7": true})
+	if err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("marked = %d, want 1", n)
+	}
+
+	gotAlive, _ := s.GetImageByRef(alive.Reference)
+	if gotAlive.Status != models.StatusUpToDate {
+		t.Errorf("alive docker image status = %q, want up-to-date", gotAlive.Status)
+	}
+	gotRemoved, _ := s.GetImageByRef(removed.Reference)
+	if gotRemoved.Status != models.StatusStale {
+		t.Errorf("removed docker image status = %q, want stale", gotRemoved.Status)
+	}
+	gotManual, _ := s.GetImageByRef(manual.Reference)
+	if gotManual.Status != models.StatusUpToDate {
+		t.Errorf("manual image must not be touched, status = %q", gotManual.Status)
+	}
+
+	// 空 liveRefs（docker 不可用信号）应安全地不做任何改动
+	if err := s.UpsertImage(&models.Image{ID: gotRemoved.ID, Name: gotRemoved.Name,
+		Reference: gotRemoved.Reference, Source: "docker", Registry: gotRemoved.Registry,
+		Tag: gotRemoved.Tag, Status: models.StatusUpToDate, CreatedAt: gotRemoved.CreatedAt}); err != nil {
+		t.Fatalf("re-upsert removed: %v", err)
+	}
+	n2, err := s.MarkDockerImagesMissing(nil)
+	if err != nil {
+		t.Fatalf("mark with empty: %v", err)
+	}
+	if n2 != 0 {
+		t.Errorf("marked with empty liveRefs = %d, want 0", n2)
+	}
+}

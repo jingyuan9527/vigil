@@ -241,5 +241,29 @@ func (s *Scanner) Run(ctx context.Context) {
 		}(j)
 	}
 	wg.Wait()
+	// 清理本机已删除镜像的库内残留：将 source=docker 且本轮不再存在的行标记为 stale（缺失）。
+	s.pruneRemovedDockerImages(ctx)
 	_ = s.store.FinishScan(scanID, checked, updates, "done", "")
+}
+
+// pruneRemovedDockerImages 对本机已不存在的 docker 镜像做陈旧标记。
+// 仅当 Docker 守护进程可达时执行；manual / watch 来源不受影响。
+func (s *Scanner) pruneRemovedDockerImages(ctx context.Context) {
+	if s.docker == nil {
+		return
+	}
+	if err := s.docker.Ping(ctx); err != nil {
+		return
+	}
+	live, err := s.docker.ListImageRefs(ctx)
+	if err != nil {
+		return
+	}
+	liveRefs := make(map[string]bool, len(live))
+	for ref := range live {
+		liveRefs[ref] = true
+	}
+	if n, err := s.store.MarkDockerImagesMissing(liveRefs); err == nil && n > 0 {
+		log.Printf("marked %d removed docker image(s) as stale", n)
+	}
 }
