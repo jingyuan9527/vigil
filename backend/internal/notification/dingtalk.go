@@ -66,3 +66,19 @@ func NotifyUpdate(webhookURL, imageRef, oldDigest, newDigest string) error {
 	)
 	return SendDingTalk(webhookURL, title, content)
 }
+
+// NotifyNewTag 发送「更高独立版本」弱提醒到钉钉。
+func NotifyNewTag(webhookURL, imageRef, currentTag, newerTag string) error {
+	title := "DockMon 可选新版本提醒"
+	content := fmt.Sprintf(
+		"### ⭐ 镜像出现更新的独立版本\n\n"+
+			"**镜像**: %s\n\n"+
+			"**当前版本**: `%s`\n\n"+
+			"**可选新版本**: `%s`\n\n"+
+			"**说明**: 检测到仓库存在更高版本（如大版本升级），当前仍在监控旧版本，可按需升级。\n\n"+
+			"**时间**: %s\n",
+		imageRef, currentTag, newerTag,
+		time.Now().Format("2006-01-02 15:04:05"),
+	)
+	return SendDingTalk(webhookURL, title, content)
+}

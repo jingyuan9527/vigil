@@ -86,7 +86,7 @@
 |---|---|---|
 | 触发 | 同一 tag 的 manifest digest 变化 | 仓库出现比当前更高的独立语义版本（取最高） |
 | 典型 | `mysql:latest` 重新发布 | `mysql:8.4.7` → 仓库出现 `26` |
-| 渠道 | 系统通知 + 钉钉 | 仅系统内通知 |
+| 渠道 | 系统通知 + 钉钉 | 系统通知 + 钉钉弱提醒（「⭐ 可选新版本」） |
 | 去重 | digest 未变不重复 | `images.notified_new_tag` 记录目标，更高才再次提醒 |
 
 - 新增 `backend/internal/version/`：语义 tag 解析/比较（`ParseTag`/`Less`/`Higher`/`NewerAvailable`）；`latest`/`lts`/非数字段判为滚动 tag。

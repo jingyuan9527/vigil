@@ -183,7 +183,7 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 }
 
 // maybeNotifyNewerTag 探测仓库是否出现比当前固定 tag 更高的新版本。
-// 是则生成一条 type=new-tag 的弱提醒（系统内，不发钉钉），并记录去重目标。
+// 是则生成一条 type=new-tag 的弱提醒（系统内 + 钉钉弱提醒），并记录去重目标。
 // 返回是否产生了提醒。
 func (s *Scanner) maybeNotifyNewerTag(ctx context.Context, img *models.Image, existing *models.Image) bool {
 	if img == nil || img.ID == 0 {
@@ -223,6 +223,15 @@ func (s *Scanner) maybeNotifyNewerTag(ctx context.Context, img *models.Image, ex
 		Message:    msg,
 	})
 	_ = s.store.SetNotifiedNewTag(img.ID, newer)
+
+	// 钉钉同步发一条弱提醒（语义上为“可选新版本”，与强更新的强通知区分）
+	if webhook := s.settings.Snapshot().DingTalkWebhook; webhook != "" {
+		go func() {
+			if err := notification.NotifyNewTag(webhook, img.Reference, img.Tag, newer); err != nil {
+				log.Printf("dingtalk notify-newtag failed for %s: %v", img.Reference, err)
+			}
+		}()
+	}
 	return true
 }
 
