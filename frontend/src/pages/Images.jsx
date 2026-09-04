@@ -123,8 +123,8 @@ export default function Images() {
       await api.setIgnored(img.id, !img.ignored)
       await load()
       toast('success', img.ignored ? '已恢复该镜像的更新检测' : '已忽略该镜像（跳过全部检测）')
-    } catch {
-      toast('error', '操作失败，请重试')
+    } catch (e) {
+      toast('error', e?.message || '操作失败，请重试')
     }
   }
 

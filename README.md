@@ -138,6 +138,10 @@ docker pull --platform linux/arm64 ghcr.io/jingyuan9527/vigil:latest
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/health` | 健康检查 |
+| GET | `/api/auth/check` | 是否需要初始化设置 + 当前是否已认证 |
+| POST | `/api/auth/setup` | 首次部署设置管理员账号（成功后写入登录 cookie） |
+| POST | `/api/auth/login` | 登录（成功后写入登录 cookie） |
+| POST | `/api/auth/logout` | 登出（清除登录 cookie） |
 | GET | `/api/stats` | 仪表盘统计 |
 | GET | `/api/images?status=` | 镜像列表（可按状态过滤） |
 | POST | `/api/images` | 新增手动监控 `{ "reference": "nginx:latest" }` |
@@ -147,10 +151,16 @@ docker pull --platform linux/arm64 ghcr.io/jingyuan9527/vigil:latest
 | GET | `/api/settings` | 获取当前运行时设置（扫描间隔、注册表、演示列表等） |
 | PUT | `/api/settings` | 更新设置，持久化并即时生效（重启后仍保留） |
 | GET | `/api/scans` | 扫描历史 |
-| GET | `/api/notifications?unread=1` | 通知列表 |
+| GET | `/api/notifications?unread=1` | 通知列表（支持 `cursor` 参数翻页加载更早通知） |
 | POST | `/api/notifications/:id/read` | 标记单条已读 |
 | POST | `/api/notifications/read-all` | 全部已读 |
 | PUT | `/api/images/:id/mode` | 设置镜像检测模式覆写 `{ "mode": "auto" \| "digest-only" \| "pin-watch" }` |
+
+> **认证与安全**：登录态由后端维护，JWT 通过 `httpOnly` cookie（`SameSite=Lax`）下发，
+> 前端 JS 不接触令牌，降低 XSS 窃取风险；跨站请求不携带 cookie，天然抵御 CSRF。
+> 登录/初始化接口按 IP 限流：连续 5 次失败锁定 15 分钟。
+> **扫描并发**：同一时刻只允许一次扫描执行（定时器、手动扫描、添加镜像并发触发时，
+> 后到者跳过），重复触发 `/api/scan` 返回 `"result": "scan already running"`。
 
 ---
 

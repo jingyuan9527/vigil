@@ -83,6 +83,7 @@ func main() {
 			select {
 			case <-tm.C:
 				sc.Run(context.Background(), false)
+				// 扫描结束后重新读取间隔（可能已被页面修改）
 			case <-ch:
 				tm.Stop()
 			}

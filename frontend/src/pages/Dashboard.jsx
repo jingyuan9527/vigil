@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, fmtTime, fmtShort, shortDigest } from '../api/client'
+import { useAuth } from '../context/AuthContext'
 import BentoCard from '../components/BentoCard'
 import StatCard from '../components/StatCard'
 import StatusBadge from '../components/StatusBadge'
@@ -14,26 +15,44 @@ function IconBox({ path }) {
   )
 }
 
+const POLL_INTERVAL_MS = 30_000 // 仪表盘轮询间隔（与最小扫描间隔对齐）
+
 export default function Dashboard() {
   const navigate = useNavigate()
+  const { registerDashboardRefresh } = useAuth()
   const [stats, setStats] = useState(null)
   const [images, setImages] = useState([])
   const [notifs, setNotifs] = useState([])
   const [loading, setLoading] = useState(true)
+  const loadedRef = useRef(false)
 
+  const loadAll = async () => {
+    try {
+      const [s, imgs, n] = await Promise.all([api.stats(), api.images(), api.notifications(false)])
+      setStats(s)
+      setImages(imgs.images || [])
+      setNotifs((n.notifications || []).slice(0, 6))
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // 注册轮询入口，供其他页面主动触发刷新；首屏加载只做一次
   useEffect(() => {
-    ;(async () => {
-      try {
-        const [s, imgs, n] = await Promise.all([api.stats(), api.images(), api.notifications(false)])
-        setStats(s)
-        setImages(imgs.images || [])
-        setNotifs((n.notifications || []).slice(0, 6))
-      } catch (e) {
-        // ignore
-      } finally {
-        setLoading(false)
-      }
-    })()
+    loadedRef.current = true
+    loadAll()
+    registerDashboardRefresh(() => {
+      if (!loadedRef.current) return
+      loadAll()
+    })
+    const id = setInterval(loadAll, POLL_INTERVAL_MS)
+    return () => {
+      loadedRef.current = false
+      registerDashboardRefresh(null) // 卸载时注销，避免悬空回调
+      clearInterval(id)
+    }
   }, [])
 
   if (loading || !stats) return <Spinner label="加载仪表盘…" />

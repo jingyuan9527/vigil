@@ -29,6 +29,7 @@ func NewClient(dockerHost string) (*Client, error) {
 		return &Client{
 			baseURL: "http://unix",
 			http: &http.Client{
+				Timeout: 10 * time.Second,
 				Transport: &http.Transport{
 					DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 						d := net.Dialer{}

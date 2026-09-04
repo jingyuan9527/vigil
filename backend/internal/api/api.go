@@ -21,23 +21,25 @@ import (
 )
 
 type api struct {
-	store     *store.Store
-	scanner   *scanner.Scanner
-	reg       *registry.Client
-	staticDir string
-	settings  *config.LiveSettings
-	jwtSecret []byte
+	store        *store.Store
+	scanner      *scanner.Scanner
+	reg          *registry.Client
+	staticDir    string
+	settings     *config.LiveSettings
+	jwtSecret    []byte
+	loginLimiter *auth.LoginLimiter
 }
 
 // NewRouter 构造 HTTP 处理器：/api 走接口，其余路径回退到前端静态资源（SPA）。
 func NewRouter(staticDir string, st *store.Store, sc *scanner.Scanner, reg *registry.Client, settings *config.LiveSettings, jwtSecret []byte) http.Handler {
-	a := &api{store: st, scanner: sc, reg: reg, staticDir: staticDir, settings: settings, jwtSecret: jwtSecret}
+	a := &api{store: st, scanner: sc, reg: reg, staticDir: staticDir, settings: settings, jwtSecret: jwtSecret, loginLimiter: auth.NewLoginLimiter()}
 	mux := http.NewServeMux()
 
 	// 认证相关（无需 token）
 	mux.HandleFunc("/api/auth/check", a.authCheck)
 	mux.HandleFunc("/api/auth/setup", a.authSetup)
 	mux.HandleFunc("/api/auth/login", a.authLogin)
+	mux.HandleFunc("/api/auth/logout", a.authLogout)
 
 	// 受保护的 API
 	mux.HandleFunc("/api/health", a.health)
@@ -120,17 +122,24 @@ func (a *api) health(w http.ResponseWriter, r *http.Request) {
 
 // ---- Auth handlers ----
 
-// authCheck 返回是否需要初始化设置。
+// authCheck 返回是否需要初始化设置、当前请求是否已认证。
 func (a *api) authCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"setup_required": !a.store.HasAdmin(),
+		"authenticated":  auth.RequestAuthenticated(r, a.jwtSecret),
 	})
 }
 
 // authSetup 首次部署时设置管理员账号（仅在无管理员时可用）。
+// 登录态写入 httpOnly cookie（前端不接触令牌）；响应体不再回传 token。
 func (a *api) authSetup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w)
+		return
+	}
+	ip := auth.ClientIP(r)
+	if !a.loginLimiter.Allow(ip) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "尝试过于频繁，请稍后再试"})
 		return
 	}
 	if a.store.HasAdmin() {
@@ -142,15 +151,18 @@ func (a *api) authSetup(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.loginLimiter.RecordFailure(ip)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
 	body.Username = strings.TrimSpace(body.Username)
 	if body.Username == "" || body.Password == "" {
+		a.loginLimiter.RecordFailure(ip)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "用户名和密码不能为空"})
 		return
 	}
 	if len(body.Password) < 6 {
+		a.loginLimiter.RecordFailure(ip)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "密码长度至少 6 位"})
 		return
 	}
@@ -164,13 +176,20 @@ func (a *api) authSetup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "生成 token 失败"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+	auth.SetTokenCookie(w, token)
+	a.loginLimiter.Reset(ip)
+	writeJSON(w, http.StatusOK, map[string]string{"result": "ok"})
 }
 
-// authLogin 用户登录。
+// authLogin 用户登录：校验凭据后写入 httpOnly cookie。
 func (a *api) authLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w)
+		return
+	}
+	ip := auth.ClientIP(r)
+	if !a.loginLimiter.Allow(ip) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "尝试过于频繁，请稍后再试"})
 		return
 	}
 	if !a.store.HasAdmin() {
@@ -182,11 +201,13 @@ func (a *api) authLogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.loginLimiter.RecordFailure(ip)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
 	storedUser, storedHash := a.store.GetAdmin()
 	if body.Username != storedUser || !auth.CheckPassword(storedHash, body.Password) {
+		a.loginLimiter.RecordFailure(ip)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "用户名或密码错误"})
 		return
 	}
@@ -195,7 +216,19 @@ func (a *api) authLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "生成 token 失败"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+	auth.SetTokenCookie(w, token)
+	a.loginLimiter.Reset(ip)
+	writeJSON(w, http.StatusOK, map[string]string{"result": "ok"})
+}
+
+// authLogout 清除令牌 cookie。
+func (a *api) authLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	auth.ClearTokenCookie(w)
+	writeJSON(w, http.StatusOK, map[string]string{"result": "ok"})
 }
 
 func (a *api) stats(w http.ResponseWriter, r *http.Request) {
@@ -334,6 +367,10 @@ func (a *api) scan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	force := r.URL.Query().Get("force") == "1"
+	if a.scanner.IsRunning() {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"result": "scan already running", "force": force})
+		return
+	}
 	go a.scanner.Run(context.Background(), force)
 	writeJSON(w, http.StatusAccepted, map[string]interface{}{"result": "scan started", "force": force})
 }
@@ -397,7 +434,13 @@ func (a *api) notifications(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	unread := r.URL.Query().Get("unread") == "1"
-	list, err := a.store.ListNotifications(unread)
+	cursorID := int64(0)
+	if v := r.URL.Query().Get("cursor"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cursorID = n
+		}
+	}
+	list, err := a.store.ListNotifications(unread, cursorID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

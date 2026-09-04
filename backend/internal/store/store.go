@@ -48,7 +48,6 @@ func migrate(db *sql.DB) error {
 		last_update   TEXT,
 		error         TEXT,
 		ignored       INTEGER NOT NULL DEFAULT 0,
-		notified_new_tag TEXT,
 		created_at    TEXT NOT NULL
 	);
 	CREATE TABLE IF NOT EXISTS image_versions (
@@ -108,7 +107,6 @@ func migrate(db *sql.DB) error {
 	// 轻量幂等迁移：为旧版本库补充新增列（SQLite 无 ADD COLUMN IF NOT EXISTS，
 	// 通过忽略 duplicate column 错误实现幂等）。
 	_ = addColumnIfMissing(db, "images", "ignored", "INTEGER NOT NULL DEFAULT 0")
-	_ = addColumnIfMissing(db, "images", "notified_new_tag", "TEXT")
 	_ = addColumnIfMissing(db, "images", "mode", "TEXT NOT NULL DEFAULT 'auto'")
 	_ = addColumnIfMissing(db, "notifications", "type", "TEXT NOT NULL DEFAULT 'update'")
 	return nil
@@ -149,30 +147,29 @@ func ns(v sql.NullString) string {
 // GetImageByRef 按引用查找镜像，未找到返回 (nil, nil)。
 func (s *Store) GetImageByRef(ref string) (*models.Image, error) {
 	row := s.db.QueryRow(
-		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,notified_new_tag,mode,created_at
+		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,mode,created_at
 		 FROM images WHERE reference=?`, ref)
 	return scanImage(row)
 }
 
 func (s *Store) GetImage(id int64) (*models.Image, error) {
 	row := s.db.QueryRow(
-		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,notified_new_tag,mode,created_at
+		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,mode,created_at
 		 FROM images WHERE id=?`, id)
 	return scanImage(row)
 }
 
 func scanImage(row *sql.Row) (*models.Image, error) {
 	var (
-		id                                              int64
+		id                     int64
 		name, reference, registry, tag                 string
 		source, localDigest, remoteDigest, status       string
 		lastCheck, lastUpdate, errMsg, createdAt        sql.NullString
 		ignored                                         int
-		notifiedNewTag                                  sql.NullString
 		mode                                            sql.NullString
 	)
 	if err := row.Scan(&id, &name, &reference, &registry, &tag, &source, &localDigest,
-		&remoteDigest, &status, &lastCheck, &lastUpdate, &errMsg, &ignored, &notifiedNewTag, &mode, &createdAt); err != nil {
+		&remoteDigest, &status, &lastCheck, &lastUpdate, &errMsg, &ignored, &mode, &createdAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -187,7 +184,6 @@ func scanImage(row *sql.Row) (*models.Image, error) {
 		Source: source, LocalDigest: localDigest, RemoteDigest: remoteDigest,
 		Status:         models.ImageStatus(status),
 		Ignored:        ignored == 1,
-		NotifiedNewTag: ns(notifiedNewTag),
 		Mode:           m,
 		EffectiveMode:  models.ResolveMode(m, tag),
 		LastCheck:      parseTime(ns(lastCheck)),
@@ -198,7 +194,7 @@ func scanImage(row *sql.Row) (*models.Image, error) {
 }
 
 // UpsertImage 按 reference 插入或更新镜像记录。
-// 刻意不写 mode / ignored / notified_new_tag 列（防覆盖点）：
+// 刻意不写 mode / ignored 列（防覆盖点）：
 // mode 只能由 SetMode 修改；ignored 只能由 SetIgnored 修改；扫描每轮只更新采集与检测得到的字段。
 func (s *Store) UpsertImage(img *models.Image) error {
 	created := nowStr()
@@ -350,7 +346,7 @@ func (s *Store) MarkDockerImagesMissing(liveRefs map[string]bool) (int64, error)
 
 // ListImages 列出镜像，status 为空时返回全部。
 func (s *Store) ListImages(status string) ([]models.Image, error) {
-	q := `SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,notified_new_tag,mode,created_at FROM images`
+	q := `SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,mode,created_at FROM images`
 	var rows *sql.Rows
 	var err error
 	if status != "" {
@@ -366,16 +362,15 @@ func (s *Store) ListImages(status string) ([]models.Image, error) {
 	var out []models.Image
 	for rows.Next() {
 		var (
-			id                                                       int64
+			id                                                     int64
 			name, reference, registry, tag                          string
 			source, localDigest, remoteDigest, st                  string
 			lastCheck, lastUpdate, errMsg, createdAt               sql.NullString
 			ignored                                                  int
-			notifiedNewTag                                          sql.NullString
 			mode                                                    sql.NullString
 		)
 		if err := rows.Scan(&id, &name, &reference, &registry, &tag, &source, &localDigest,
-			&remoteDigest, &st, &lastCheck, &lastUpdate, &errMsg, &ignored, &notifiedNewTag, &mode, &createdAt); err != nil {
+			&remoteDigest, &st, &lastCheck, &lastUpdate, &errMsg, &ignored, &mode, &createdAt); err != nil {
 			return nil, err
 		}
 		m := ns(mode)
@@ -387,8 +382,7 @@ func (s *Store) ListImages(status string) ([]models.Image, error) {
 			Source: source, LocalDigest: localDigest, RemoteDigest: remoteDigest,
 			Status:         models.ImageStatus(st),
 			Ignored:        ignored == 1,
-			NotifiedNewTag: ns(notifiedNewTag),
-			Mode:           m,
+				Mode:           m,
 			EffectiveMode:  models.ResolveMode(m, tag),
 			LastCheck:      parseTime(ns(lastCheck)),
 			LastUpdate:     parseTime(ns(lastUpdate)),
@@ -451,14 +445,29 @@ func (s *Store) CreateNotification(n *models.Notification) error {
 	return err
 }
 
-func (s *Store) ListNotifications(unreadOnly bool) ([]models.Notification, error) {
+func (s *Store) ListNotifications(unreadOnly bool, cursorID int64) ([]models.Notification, error) {
 	q := `SELECT id,image_id,image_name,reference,old_digest,new_digest,old_tag,new_tag,type,message,read,created_at
 	      FROM notifications`
+	where := ""
 	if unreadOnly {
-		q += " WHERE read=0"
+		where = "WHERE read=0"
 	}
-	q += " ORDER BY created_at DESC LIMIT 200"
-	rows, err := s.db.Query(q)
+	if cursorID > 0 {
+		if where != "" {
+			where += " AND "
+		} else {
+			where = "WHERE "
+		}
+		where += "id < ?"
+	}
+	// 按 id 倒序分页：id 单调递增等价于时间倒序，且不存在 created_at 同秒
+	// tie-breaking 导致的行丢失（游标 id < ? 与排序键一致，分页严格确定）。
+	q += " " + where + " ORDER BY id DESC LIMIT 100"
+	args := []interface{}{}
+	if cursorID > 0 {
+		args = append(args, cursorID)
+	}
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -583,15 +592,34 @@ func (s *Store) LastScan() (*models.Scan, error) {
 
 func (s *Store) Stats() (*models.Stats, error) {
 	st := &models.Stats{}
-	count := func(status string) int {
-		var n int
-		s.db.QueryRow("SELECT COUNT(*) FROM images WHERE status=?", status).Scan(&n)
-		return n
+	// 单次 GROUP BY 替代 4 次独立 COUNT，减少 SQLite 扫描次数。
+	// status IS NOT NULL：旧库可能残留 NULL 状态行，排除以免 Scan 报错打挂整个接口。
+	rows, err := s.db.Query("SELECT status, COUNT(*) FROM images WHERE status IS NOT NULL GROUP BY status")
+	if err != nil {
+		return nil, err
 	}
-	st.Total = count("up-to-date") + count("update-available") + count("unknown") + count("stale")
-	st.UpToDate = count("up-to-date")
-	st.UpdateAvailable = count("update-available")
-	st.Unknown = count("unknown") + count("stale")
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, err
+		}
+		switch status {
+		case "up-to-date":
+			st.UpToDate = n
+			st.Total += n
+		case "update-available":
+			st.UpdateAvailable = n
+			st.Total += n
+		case "unknown", "stale":
+			st.Unknown += n
+			st.Total += n
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	unread, err := s.UnreadCount()
 	if err == nil {
 		st.UnreadNotifs = unread

@@ -29,23 +29,25 @@ func TestAPIRouter(t *testing.T) {
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 
-	// 首次启动需设置管理员以取得 token（受保护 API 均要求 Bearer 认证）
+	// 首次启动需设置管理员：登录态写入 httpOnly cookie，测试从 Set-Cookie 提取 token
+	// 作为后续请求的 Bearer（受保护 API 同时接受 Authorization 头）。
 	setupResp, err := http.Post(srv.URL+"/api/auth/setup", "application/json",
 		strings.NewReader(`{"username":"admin","password":"secret123"}`))
 	if err != nil {
 		t.Fatalf("POST /api/auth/setup: %v", err)
 	}
-	var setupBody struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(setupResp.Body).Decode(&setupBody); err != nil {
-		t.Fatalf("decode setup: %v", err)
-	}
 	setupResp.Body.Close()
-	if setupBody.Token == "" {
-		t.Fatal("setup did not return a token")
+	tok := ""
+	for _, part := range strings.Split(setupResp.Header.Get("Set-Cookie"), ";") {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "dockmon_token=") {
+			tok = strings.TrimPrefix(part, "dockmon_token=")
+			break
+		}
 	}
-	tok := setupBody.Token
+	if tok == "" {
+		t.Fatal("setup did not set dockmon_token cookie")
+	}
 
 	get := func(path string) (int, []byte) {
 		req, _ := http.NewRequest("GET", srv.URL+path, nil)

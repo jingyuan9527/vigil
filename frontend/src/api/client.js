@@ -1,66 +1,44 @@
 const API = '/api'
 
-function getToken() {
-  return localStorage.getItem('dockmon_token')
-}
+// 认证基于 httpOnly cookie（SameSite=Lax）：同源 fetch 自动携带，
+// JS 不再持有/读写令牌，降低 XSS 窃取面。令牌无效时刷新页面，
+// 由 AuthProvider 重新校验并回到登录页。
 
-function authHeaders(extra) {
-  const h = { ...extra }
-  const t = getToken()
-  if (t) h['Authorization'] = 'Bearer ' + t
-  return h
-}
-
-async function getJSON(path) {
-  const res = await fetch(API + path, { headers: authHeaders() })
+async function handle(res) {
   if (res.status === 401) {
-    localStorage.removeItem('dockmon_token')
     window.location.reload()
     throw new Error('未授权')
   }
   if (!res.ok) throw new Error('请求失败: ' + res.status)
   return res.json()
+}
+
+async function getJSON(path) {
+  const res = await fetch(API + path)
+  return handle(res)
 }
 
 async function postJSON(path, body) {
   const res = await fetch(API + path, {
     method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   })
-  if (res.status === 401) {
-    localStorage.removeItem('dockmon_token')
-    window.location.reload()
-    throw new Error('未授权')
-  }
-  if (!res.ok) throw new Error('请求失败: ' + res.status)
-  return res.json()
+  return handle(res)
 }
 
 async function putJSON(path, body) {
   const res = await fetch(API + path, {
     method: 'PUT',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    headers: { 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   })
-  if (res.status === 401) {
-    localStorage.removeItem('dockmon_token')
-    window.location.reload()
-    throw new Error('未授权')
-  }
-  if (!res.ok) throw new Error('请求失败: ' + res.status)
-  return res.json()
+  return handle(res)
 }
 
 async function del(path) {
-  const res = await fetch(API + path, { method: 'DELETE', headers: authHeaders() })
-  if (res.status === 401) {
-    localStorage.removeItem('dockmon_token')
-    window.location.reload()
-    throw new Error('未授权')
-  }
-  if (!res.ok) throw new Error('请求失败: ' + res.status)
-  return res.json()
+  const res = await fetch(API + path, { method: 'DELETE' })
+  return handle(res)
 }
 
 export const api = {
@@ -68,6 +46,7 @@ export const api = {
   authCheck: () => getJSON('/auth/check'),
   authSetup: (username, password) => postJSON('/auth/setup', { username, password }),
   authLogin: (username, password) => postJSON('/auth/login', { username, password }),
+  authLogout: () => postJSON('/auth/logout'),
 
   // Protected APIs
   health: () => getJSON('/health'),
@@ -75,7 +54,7 @@ export const api = {
   images: (status) => getJSON('/images' + (status ? `?status=${status}` : '')),
   image: (id) => getJSON('/images/' + id),
   scans: () => getJSON('/scans'),
-  notifications: (unread) => getJSON('/notifications' + (unread ? '?unread=1' : '')),
+  notifications: (unread, cursor) => getJSON('/notifications' + (unread ? '?unread=1' : '') + (cursor ? '&cursor=' + cursor : '')),
   scanNow: (force) => postJSON('/scan' + (force ? '?force=1' : '')),
   settings: () => getJSON('/settings'),
   saveSettings: (s) => putJSON('/settings', s),

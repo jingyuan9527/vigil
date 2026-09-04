@@ -181,7 +181,7 @@ func TestPinWatchBaselineThenNewTag(t *testing.T) {
 	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
 
 	newTagNotifs := func() []models.Notification {
-		all, _ := st.ListNotifications(false)
+		all, _ := st.ListNotifications(false, 0)
 		var out []models.Notification
 		for _, n := range all {
 			if n.Type == models.NotifNewTag {
@@ -243,7 +243,7 @@ func TestRollingTagNoTagInspection(t *testing.T) {
 	if atomic.LoadInt32(tcalls) != 0 {
 		t.Errorf("tags/list called %d times for rolling tag, want 0 (digest-only skips inspection)", *tcalls)
 	}
-	all, _ := st.ListNotifications(false)
+	all, _ := st.ListNotifications(false, 0)
 	for _, n := range all {
 		if n.Type == models.NotifNewTag {
 			t.Errorf("rolling tag produced new-tag notify: %+v", n)
@@ -323,7 +323,7 @@ func TestModeOverrideDigestOnly(t *testing.T) {
 	if got := atomic.LoadInt32(tcalls) - baseTags; got != 0 {
 		t.Errorf("tags/list calls after digest-only override = %d, want 0", got)
 	}
-	all, _ := st.ListNotifications(false)
+	all, _ := st.ListNotifications(false, 0)
 	for _, n := range all {
 		if n.Type == models.NotifNewTag {
 			t.Errorf("digest-only override produced new-tag notify: %+v", n)

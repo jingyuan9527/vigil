@@ -62,7 +62,7 @@ func TestStoreCRUD(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("notif: %v", err)
 	}
-	ns, _ := s.ListNotifications(false)
+	ns, _ := s.ListNotifications(false, 0)
 	if len(ns) != 1 {
 		t.Fatalf("notif count = %d", len(ns))
 	}

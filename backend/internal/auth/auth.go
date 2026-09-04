@@ -107,6 +107,49 @@ func ValidateToken(token string, secret []byte) (string, error) {
 
 // ---- HTTP Middleware ----
 
+// 令牌 cookie 相关：登录态由 httpOnly cookie 维持（同源部署，防 XSS 窃取）。
+const (
+	// TokenCookieName 令牌 cookie 名。
+	TokenCookieName = "dockmon_token"
+	// TokenMaxAge 令牌有效期（与 GenerateToken 的 72h 保持一致）。
+	TokenMaxAge = 72 * time.Hour
+)
+
+// SetTokenCookie 将 JWT 写入 httpOnly cookie。
+// SameSite=Lax：跨站请求不携带 cookie，天然抵御 CSRF；同源 fetch 自动携带。
+func SetTokenCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     TokenCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(TokenMaxAge.Seconds()),
+	})
+}
+
+// ClearTokenCookie 清除令牌 cookie（登出）。
+func ClearTokenCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     TokenCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+}
+
+// RequestAuthenticated 报告请求是否携带有效令牌（Authorization 头或 cookie）。
+func RequestAuthenticated(r *http.Request, secret []byte) bool {
+	token := extractToken(r)
+	if token == "" {
+		return false
+	}
+	_, err := ValidateToken(token, secret)
+	return err == nil
+}
+
 func GenerateSecret() []byte {
 	b := make([]byte, 32)
 	_, _ = rand.Read(b)

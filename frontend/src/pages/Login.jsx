@@ -20,8 +20,8 @@ export default function Login() {
     setLoading(true)
     try {
       const fn = setupRequired ? api.authSetup : api.authLogin
-      const res = await fn(username, password)
-      login(res.token)
+      await fn(username, password)
+      login() // 登录态已由后端写入 httpOnly cookie
     } catch (err) {
       setError(err.message.includes('请求失败') ? '用户名或密码错误' : err.message)
     } finally {

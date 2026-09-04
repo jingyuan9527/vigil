@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"dockmon/internal/config"
@@ -23,6 +24,7 @@ type Scanner struct {
 	docker   *docker.Client
 	reg      *registry.Client
 	settings *config.LiveSettings
+	running  atomic.Bool // 扫描单飞锁：同一时刻只允许一个扫描执行
 }
 
 func New(cfg *config.Config, st *store.Store, dcli *docker.Client, reg *registry.Client, settings *config.LiveSettings) *Scanner {
@@ -282,8 +284,14 @@ func (s *Scanner) inspectTags(ctx context.Context, img *models.Image) bool {
 }
 
 // computeStatus 依据本地摘要、远端摘要与上次远端摘要，判定镜像状态。
-// 返回 (状态, 是否发生真正变化)。changed 仅当 prevRemote 非空且与 remote 不同，
-// 用于区分「首次建立基线」与「远端确实更新了」，避免首扫误报通知。
+//
+// changed 返回值表示「远端摘要发生了真实变更」：当 prevRemote 非空且与 remote 不等时为 true。
+// 关键语义：
+//   - 首扫（prevRemote == ""）时 changed=false，即使 local!=remote，也不会触发 last_update 更新，
+//     从而避免首扫将「首次记录远端基线」误判为「有新版本」而刷通知。
+//   - Digest-Only 常规告警的完整条件是 changed && status==update-available（见 process 通知闸门）：
+//     local!=remote 且远端相对上次变化时同时满足 → 触发 update 通知并更新 last_update。
+//     local==remote（如浮动 tag 重新推送为同一内容）时 status=up-to-date → 不告警。
 func computeStatus(local, remote, prevRemote string) (models.ImageStatus, bool) {
 	changed := prevRemote != "" && remote != "" && prevRemote != remote
 	var status models.ImageStatus
@@ -309,17 +317,29 @@ func computeStatus(local, remote, prevRemote string) (models.ImageStatus, bool) 
 	return status, changed
 }
 
+// IsRunning 报告是否已有扫描正在执行（供 API 层提前返回友好提示）。
+func (s *Scanner) IsRunning() bool { return s.running.Load() }
+
 // Run 执行一次完整扫描。force=true 时为「强制扫描」：对当前所有存在版本差异的
 // 镜像补发 update 通知（按 digest 去重），覆盖 Pin-Watch 锁定 tag 被覆盖等常规不告警的情况。
-func (s *Scanner) Run(ctx context.Context, force bool) {
+//
+// 返回是否真正启动：定时器、手动扫描、添加镜像可能并发触发，CAS 保证单飞，
+// 重复触发直接跳过（返回 false）。
+func (s *Scanner) Run(ctx context.Context, force bool) bool {
+	if !s.running.CompareAndSwap(false, true) {
+		log.Printf("scan requested while already running, skipping")
+		return false
+	}
+	defer s.running.Store(false)
+
 	scanID, err := s.store.CreateScan()
 	if err != nil {
-		return
+		return false
 	}
 	jobs := s.collectJobs(ctx)
 	if len(jobs) == 0 {
 		_ = s.store.FinishScan(scanID, 0, 0, "done", "")
-		return
+		return true
 	}
 
 	var mu sync.Mutex
@@ -354,6 +374,7 @@ func (s *Scanner) Run(ctx context.Context, force bool) {
 	// 清理本机已删除镜像的库内残留：将 source=docker 且本轮不再存在的行标记为 stale（缺失）。
 	s.pruneRemovedDockerImages(ctx)
 	_ = s.store.FinishScan(scanID, checked, updates, "done", "")
+	return true
 }
 
 // pruneRemovedDockerImages 对本机已不存在的 docker 镜像做陈旧标记。

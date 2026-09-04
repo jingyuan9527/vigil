@@ -178,7 +178,7 @@ export default function Layout() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-hidden">
-            <Outlet context={{ refreshNotifs: refresh, navigate }} />
+            <Outlet context={{ refreshNotifs: refresh, navigate, dashboardRefresh: useAuth().dashboardRefresh }} />
           </div>
         </div>
       </main>

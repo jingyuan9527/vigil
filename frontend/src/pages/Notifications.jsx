@@ -42,21 +42,44 @@ const GROUPS = [
 
 export default function Notifications() {
   const toast = useToast()
-  const { refreshNotifs } = useOutletContext() || {}
+  const { refreshNotifs, dashboardRefresh } = useOutletContext() || {}
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [unreadOnly, setUnreadOnly] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [pages, setPages] = useState({ update: 1, 'new-tag': 1 }) // 各组独立分页
   const [collapsed, setCollapsed] = useState({ update: false, 'new-tag': false }) // 各组独立折叠
+  const [cursor, setCursor] = useState(0) // 当前已加载的最小 ID，用于加载更多
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true) // 后端是否还有更早的通知（每页满 100 条才可能有）
 
-  const load = async () => {
-    setLoading(true)
+  const load = async (nextCursor, silent) => {
+    if (!silent) setLoading(true)
     try {
-      const r = await api.notifications(unreadOnly)
-      setItems(r.notifications || [])
+      const r = await api.notifications(unreadOnly, nextCursor || 0)
+      const notified = r.notifications || []
+      // 后端分页上限 100：返回不足 100 条说明已到底，隐藏「加载更多」
+      setHasMore(notified.length >= 100)
+      if (nextCursor) {
+        setItems((prev) => [...prev, ...notified])
+        setCursor(notified.length > 0 ? notified[notified.length - 1].id : nextCursor)
+      } else {
+        setItems(notified)
+        setCursor(notified.length > 0 ? notified[notified.length - 1].id : 0)
+      }
     } finally {
       setLoading(false)
+    }
+  }
+
+  // 加载更多更早的通知（按最小 ID 继续翻页；silent 避免整屏闪 Spinner）
+  const loadMore = async () => {
+    if (loadingMore || !hasMore || cursor === 0) return
+    setLoadingMore(true)
+    try {
+      await load(cursor, true)
+    } finally {
+      setLoadingMore(false)
     }
   }
 
@@ -65,16 +88,24 @@ export default function Notifications() {
     // eslint-disable-next-line
   }, [unreadOnly])
 
-  // 切换筛选后两组都回到第 1 页
+  // 切换筛选后两组都回到第 1 页并重置 cursor
   useEffect(() => {
     setPages({ update: 1, 'new-tag': 1 })
+    setCursor(0)
   }, [unreadOnly])
 
   const markRead = async (id) => {
     try {
       await api.markRead(id)
-      await load()
+      // 本地更新已读状态，不重新拉取：保留已加载的更早分页，也避免整屏闪 Spinner。
+      // unreadOnly 筛选下直接移除该条（筛选条件即未读）。
+      setItems((prev) =>
+        prev
+          .filter((n) => !(unreadOnly && n.id === id))
+          .map((n) => (n.id === id ? { ...n, read: true } : n)),
+      )
       refreshNotifs?.()
+      dashboardRefresh?.()
     } catch {
       toast('error', '标记失败，请重试')
     }
@@ -83,8 +114,13 @@ export default function Notifications() {
   const markAll = async () => {
     try {
       await api.markAllRead()
-      await load()
+      if (unreadOnly) {
+        setItems([])
+      } else {
+        setItems((prev) => prev.map((n) => ({ ...n, read: true })))
+      }
       refreshNotifs?.()
+      dashboardRefresh?.()
       toast('success', '已将全部通知标记为已读')
     } catch {
       toast('error', '操作失败，请重试')
@@ -206,6 +242,23 @@ export default function Notifications() {
               onMarkRead={markRead}
             />
           ))}
+        </div>
+      )}
+
+      {/* 加载更多：当还有更早通知且加载状态允许时显示 */}
+      {!loading && !loadingMore && hasMore && cursor > 0 && items.length > 0 && (
+        <div className="flex justify-center shrink-0">
+          <button
+            onClick={loadMore}
+            className="rounded-xl border border-zinc-200 px-5 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            加载更多通知
+          </button>
+        </div>
+      )}
+      {loadingMore && (
+        <div className="flex justify-center shrink-0">
+          <span className="text-xs text-zinc-400 animate-pulse">加载中…</span>
         </div>
       )}
       </div>
