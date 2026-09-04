@@ -63,3 +63,37 @@
 | `frontend/src/pages/Images.jsx` | "已忽略"徽标与说明、忽略/恢复按钮、筛选器加「已忽略」 |
 
 验证结果：`go build` / `go vet` / `go test ./...` 全绿；`frontend npm run build` 成功。
+
+---
+
+## 后续演进（分页 / UI 收尾 / 仓库级弱提醒）
+
+> 以下为忽略功能之后的迭代变更记录，审查基线相应推进至各 commit。
+
+### 分页（`0c2d31a`）
+- 新增公共组件 `frontend/src/components/Pagination.jsx`：页码窗口+首尾+省略号，总条数≤每页时自动隐藏。
+- 镜像列表每页 12、通知列表每页 10；筛选/搜索/未读切换回第 1 页；切页滚动回列表顶部。
+- Images 与 Notifications 两处长列表复用同一分页条，交互一致。纯前端。
+
+### UI 收尾（`6206225`）
+- Compare 页左右两栏限高内部滚动（`lg:h-[calc(100vh-230px)]`），镜像多不再纵向延伸挤出详情。
+- Images 移除镜像去原生 `confirm()`，改卡片内两段式确认（`confirmId` state），与页面内交互统一。
+
+### 仓库级新版本弱提醒（`41e60ec`）
+背景：工具原先只比较**同一 tag 的 digest**，`mysql:8.4.7` 即使远端出现独立新 tag `26` 也不会提醒。本轮补上仓库级版本发现，形成强弱两级：
+
+| | 强更新 `update` | 弱提醒 `new-tag` |
+|---|---|---|
+| 触发 | 同一 tag 的 manifest digest 变化 | 仓库出现比当前更高的独立语义版本（取最高） |
+| 典型 | `mysql:latest` 重新发布 | `mysql:8.4.7` → 仓库出现 `26` |
+| 渠道 | 系统通知 + 钉钉 | 仅系统内通知 |
+| 去重 | digest 未变不重复 | `images.notified_new_tag` 记录目标，更高才再次提醒 |
+
+- 新增 `backend/internal/version/`：语义 tag 解析/比较（`ParseTag`/`Less`/`Higher`/`NewerAvailable`）；`latest`/`lts`/非数字段判为滚动 tag。
+- `Notification.Type`（`update`/`new-tag`）；`notifications` 表 `type` 列、`images.notified_new_tag` 列，旧库幂等补列。
+- `scanner.maybeNotifyNewerTag`：对固定语义 tag 每次扫描 `ListTags` → 报更高最高版本；滚动 tag、ignored 项不探测。
+- **防覆盖同 ignored 约定**：`UpsertImage` 不写 `notified_new_tag`，仅 `SetNotifiedNewTag` 修改。
+- 前端 `Notifications.jsx`：弱提醒显示「可选更新」蓝徽标 + 当前→升级目标；强更新保留 digest 对比。
+- 测试：version 包单测 + `TestNewerTagWeakNotify`（首扫提醒→去重→出现更高再提醒）、`TestRollingTagNoWeakNotify`。
+- 验证：`go vet`/`go test ./...` 全绿（含 api/store/scanner/version），`npm run build` 成功。
+
