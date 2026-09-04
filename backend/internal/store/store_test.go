@@ -101,3 +101,55 @@ func TestStoreCRUD(t *testing.T) {
 		t.Fatalf("after delete count = %d", len(imgs))
 	}
 }
+
+// TestIgnored 验证忽略标记：SetIgnored 持久化、可读回、且不被后续 UpsertImage 覆盖。
+func TestIgnored(t *testing.T) {
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	img := &models.Image{
+		Name: "library/mysql", Reference: "mysql:8", Source: "docker",
+		Registry: "registry-1.docker.io", Tag: "8", CreatedAt: time.Now(),
+	}
+	if err := s.UpsertImage(img); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, _ := s.GetImageByRef("mysql:8")
+	if got.Ignored {
+		t.Fatal("new image should default to ignored=false")
+	}
+
+	if err := s.SetIgnored(got.ID, true); err != nil {
+		t.Fatalf("set ignored: %v", err)
+	}
+	got2, _ := s.GetImageByRef("mysql:8")
+	if !got2.Ignored {
+		t.Fatal("ignored not persisted via GetImageByRef")
+	}
+
+	// 模拟一次扫描触发的 Upsert：不应把 ignored 重置回 false
+	got2.RemoteDigest = "sha256:zzz"
+	if err := s.UpsertImage(got2); err != nil {
+		t.Fatalf("upsert while ignored: %v", err)
+	}
+	got3, _ := s.GetImageByRef("mysql:8")
+	if !got3.Ignored {
+		t.Fatal("UpsertImage must not reset ignored")
+	}
+
+	// ListImages 应带出 ignored 字段
+	list, _ := s.ListImages("")
+	if len(list) != 1 || !list[0].Ignored {
+		t.Fatalf("list ignored roundtrip failed: %+v", list)
+	}
+
+	// 取消忽略
+	if err := s.SetIgnored(got.ID, false); err != nil {
+		t.Fatalf("unignore: %v", err)
+	}
+	got4, _ := s.GetImageByRef("mysql:8")
+	if got4.Ignored {
+		t.Fatal("unignore not applied")
+	}
+}

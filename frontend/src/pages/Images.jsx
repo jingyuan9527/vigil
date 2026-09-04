@@ -9,6 +9,7 @@ const FILTERS = [
   { key: '', label: '全部' },
   { key: 'update-available', label: '有更新' },
   { key: 'up-to-date', label: '已是最新' },
+  { key: 'ignored', label: '已忽略' },
   { key: 'unknown', label: '未知' },
 ]
 
@@ -25,7 +26,9 @@ export default function Images() {
   const load = async () => {
     setLoading(true)
     try {
-      const r = await api.images(filter)
+      // filter=ignored 是本地过滤，不由后端 status 驱动；其余按 status 请求
+      const status = filter === 'ignored' ? '' : filter
+      const r = await api.images(status)
       setImages(r.images || [])
     } finally {
       setLoading(false)
@@ -38,9 +41,11 @@ export default function Images() {
   }, [filter])
 
   const filtered = useMemo(() => {
-    if (!query) return images
-    return images.filter((i) => i.reference.toLowerCase().includes(query.toLowerCase()))
-  }, [images, query])
+    let out = images
+    if (filter === 'ignored') out = out.filter((i) => i.ignored)
+    if (query) out = out.filter((i) => i.reference.toLowerCase().includes(query.toLowerCase()))
+    return out
+  }, [images, query, filter])
 
   const onAdd = async (e) => {
     e.preventDefault()
@@ -61,6 +66,12 @@ export default function Images() {
   const onRemove = async (id) => {
     if (!confirm('确定移除该监控项？')) return
     await api.removeImage(id)
+    await load()
+  }
+
+  // 忽略 = 仍扫描但不提醒（B 语义）。忽略后状态照常更新，只是不再产生系统/钉钉通知。
+  const onToggleIgnore = async (img) => {
+    await api.setIgnored(img.id, !img.ignored)
     await load()
   }
 
@@ -115,11 +126,18 @@ export default function Images() {
       ) : (
         <div className="bento-grid">
           {filtered.map((img) => (
-            <BentoCard key={img.id} className="group flex flex-col">
+            <BentoCard key={img.id} className={`group flex flex-col ${img.ignored ? 'ring-1 ring-zinc-300/70 dark:ring-zinc-600/60' : ''}`}>
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="truncate text-base font-semibold text-zinc-900 dark:text-zinc-100" title={img.reference}>
-                    {img.reference}
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-base font-semibold text-zinc-900 dark:text-zinc-100" title={img.reference}>
+                      {img.reference}
+                    </span>
+                    {img.ignored && (
+                      <span className="shrink-0 rounded-md bg-zinc-200 px-1.5 py-0.5 text-[11px] font-medium text-zinc-500 dark:bg-zinc-700 dark:text-zinc-300">
+                        已忽略
+                      </span>
+                    )}
                   </div>
                   <div className="mt-0.5 flex items-center gap-1.5 text-xs text-zinc-400">
                     <span className={`h-1.5 w-1.5 rounded-full ${img.source === 'docker' ? 'bg-blue-400' : 'bg-zinc-300 dark:bg-zinc-600'}`} />
@@ -128,6 +146,12 @@ export default function Images() {
                 </div>
                 <StatusBadge status={img.status} />
               </div>
+
+              {img.ignored && (
+                <div className="mt-2 rounded-lg bg-zinc-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-zinc-500 dark:bg-zinc-800/60 dark:text-zinc-400">
+                  已忽略更新提醒：仍会扫描并记录状态，但不再发送系统 / 钉钉通知。
+                </div>
+              )}
 
               <div className="mt-4 space-y-1.5 text-xs">
                 <DigestRow label="本地" value={shortDigest(img.local_digest)} />
@@ -144,6 +168,18 @@ export default function Images() {
                     className="flex-1 rounded-xl border border-zinc-200 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:hover:border-zinc-600"
                   >
                     版本对比
+                  </button>
+                </div>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={() => onToggleIgnore(img)}
+                    className={`flex-1 rounded-xl border py-1.5 text-sm font-medium transition-colors ${
+                      img.ignored
+                        ? 'border-emerald-300 text-emerald-600 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-500/10'
+                        : 'border-zinc-200 text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200'
+                    }`}
+                  >
+                    {img.ignored ? '恢复提醒' : '忽略'}
                   </button>
                   <button
                     onClick={() => onRemove(img.id)}

@@ -23,6 +23,7 @@ type Image struct {
 	LocalDigest  string     `json:"local_digest"` // 本地已拉取的摘要
 	RemoteDigest string     `json:"remote_digest"`
 	Status       ImageStatus `json:"status"`
+	Ignored      bool       `json:"ignored"`      // 用户手动忽略该镜像的更新提醒（仍扫描，但不产生通知）
 	LastCheck    *time.Time `json:"last_check"`
 	LastUpdate   *time.Time `json:"last_update"` // 远端摘要最近一次变化时间
 	Error        string     `json:"error,omitempty"`

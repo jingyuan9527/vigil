@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -46,6 +47,7 @@ func migrate(db *sql.DB) error {
 		last_check    TEXT,
 		last_update   TEXT,
 		error         TEXT,
+		ignored       INTEGER NOT NULL DEFAULT 0,
 		created_at    TEXT NOT NULL
 	);
 	CREATE TABLE IF NOT EXISTS image_versions (
@@ -91,6 +93,21 @@ func migrate(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_notif_read ON notifications(read);
 	`
 	_, err := db.Exec(schema)
+	if err != nil {
+		return err
+	}
+	// 轻量幂等迁移：为旧版本库补充新增列（SQLite 无 ADD COLUMN IF NOT EXISTS，
+	// 通过忽略 duplicate column 错误实现幂等）。
+	_ = addColumnIfMissing(db, "images", "ignored", "INTEGER NOT NULL DEFAULT 0")
+	return nil
+}
+
+// addColumnIfMissing 尝试为表添加列；若列已存在则忽略错误。
+func addColumnIfMissing(db *sql.DB, table, column, ddl string) error {
+	_, err := db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + ddl)
+	if err != nil && strings.Contains(err.Error(), "duplicate column") {
+		return nil
+	}
 	return err
 }
 
@@ -120,27 +137,28 @@ func ns(v sql.NullString) string {
 // GetImageByRef 按引用查找镜像，未找到返回 (nil, nil)。
 func (s *Store) GetImageByRef(ref string) (*models.Image, error) {
 	row := s.db.QueryRow(
-		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,created_at
+		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,created_at
 		 FROM images WHERE reference=?`, ref)
 	return scanImage(row)
 }
 
 func (s *Store) GetImage(id int64) (*models.Image, error) {
 	row := s.db.QueryRow(
-		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,created_at
+		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,created_at
 		 FROM images WHERE id=?`, id)
 	return scanImage(row)
 }
 
 func scanImage(row *sql.Row) (*models.Image, error) {
 	var (
-		id                               int64
-		name, reference, registry, tag  string
-		source, localDigest, remoteDigest, status string
-		lastCheck, lastUpdate, errMsg, createdAt sql.NullString
+		id                                              int64
+		name, reference, registry, tag                 string
+		source, localDigest, remoteDigest, status       string
+		lastCheck, lastUpdate, errMsg, createdAt        sql.NullString
+		ignored                                         int
 	)
 	if err := row.Scan(&id, &name, &reference, &registry, &tag, &source, &localDigest,
-		&remoteDigest, &status, &lastCheck, &lastUpdate, &errMsg, &createdAt); err != nil {
+		&remoteDigest, &status, &lastCheck, &lastUpdate, &errMsg, &ignored, &createdAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -150,6 +168,7 @@ func scanImage(row *sql.Row) (*models.Image, error) {
 		ID: id, Name: name, Reference: reference, Registry: registry, Tag: tag,
 		Source: source, LocalDigest: localDigest, RemoteDigest: remoteDigest,
 		Status:     models.ImageStatus(status),
+		Ignored:    ignored == 1,
 		LastCheck:  parseTime(ns(lastCheck)),
 		LastUpdate: parseTime(ns(lastUpdate)),
 		Error:      ns(errMsg),
@@ -183,9 +202,19 @@ func (s *Store) DeleteImage(id int64) error {
 	return err
 }
 
+// SetIgnored 设置镜像的忽略状态：忽略后仍扫描、状态照常更新，但不再产生系统/钉钉通知。
+func (s *Store) SetIgnored(id int64, ignored bool) error {
+	v := 0
+	if ignored {
+		v = 1
+	}
+	_, err := s.db.Exec("UPDATE images SET ignored=? WHERE id=?", v, id)
+	return err
+}
+
 // ListImages 列出镜像，status 为空时返回全部。
 func (s *Store) ListImages(status string) ([]models.Image, error) {
-	q := `SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,created_at FROM images`
+	q := `SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,created_at FROM images`
 	var rows *sql.Rows
 	var err error
 	if status != "" {
@@ -205,15 +234,17 @@ func (s *Store) ListImages(status string) ([]models.Image, error) {
 			name, reference, registry, tag                          string
 			source, localDigest, remoteDigest, st                  string
 			lastCheck, lastUpdate, errMsg, createdAt               sql.NullString
+			ignored                                                  int
 		)
 		if err := rows.Scan(&id, &name, &reference, &registry, &tag, &source, &localDigest,
-			&remoteDigest, &st, &lastCheck, &lastUpdate, &errMsg, &createdAt); err != nil {
+			&remoteDigest, &st, &lastCheck, &lastUpdate, &errMsg, &ignored, &createdAt); err != nil {
 			return nil, err
 		}
 		out = append(out, models.Image{
 			ID: id, Name: name, Reference: reference, Registry: registry, Tag: tag,
 			Source: source, LocalDigest: localDigest, RemoteDigest: remoteDigest,
 			Status:       models.ImageStatus(st),
+			Ignored:      ignored == 1,
 			LastCheck:    parseTime(ns(lastCheck)),
 			LastUpdate:   parseTime(ns(lastUpdate)),
 			Error:        ns(errMsg),

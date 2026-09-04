@@ -81,6 +81,7 @@ export const api = {
   saveSettings: (s) => putJSON('/settings', s),
   addImage: (reference) => postJSON('/images', { reference }),
   removeImage: (id) => del('/images/' + id),
+  setIgnored: (id, ignored) => putJSON(`/images/${id}/ignored`, { ignored }),
   markRead: (id) => postJSON('/notifications/' + id + '/read'),
   markAllRead: () => postJSON('/notifications/read-all'),
 }

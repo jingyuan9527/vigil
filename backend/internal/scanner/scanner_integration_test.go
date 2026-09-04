@@ -131,3 +131,81 @@ func TestScannerFullPipeline(t *testing.T) {
 		t.Errorf("notifications = %d, want >=1 after remote digest changed", len(notifs))
 	}
 }
+
+// TestIgnoredSuppressesNotification 验证「忽略 = 仍扫描但不提醒」语义：
+// 镜像被忽略后，远端摘要再次变化应照常判定为 update-available，
+// 但既不写入 notifications，也不计入未读 —— 便于用户取消忽略后不产生误报。
+func TestIgnoredSuppressesNotification(t *testing.T) {
+	localDigest := "aaaaaa"
+	remoteDigest := "aaaaaa"
+
+	dockerMux := http.NewServeMux()
+	dockerMux.HandleFunc("/_ping", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	dockerMux.HandleFunc("/images/json", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"Id": "sha256:1", "RepoTags": []string{"mysql:8"}, "RepoDigests": []string{"mysql@sha256:" + localDigest}},
+		})
+	})
+	dockerSrv := httptest.NewServer(dockerMux)
+	defer dockerSrv.Close()
+
+	var registrySrvURL string
+	registryMux := http.NewServeMux()
+	registryMux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"token": "fake-token"})
+	})
+	registryMux.HandleFunc("/v2/library/mysql/manifests/8", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.Header().Set("WWW-Authenticate",
+				`Bearer realm="`+registrySrvURL+`/token",service="registry.docker.io",scope="repository:library/mysql:pull"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Docker-Content-Digest", "sha256:"+remoteDigest)
+		w.WriteHeader(http.StatusOK)
+	})
+	registrySrv := httptest.NewServer(registryMux)
+	defer registrySrv.Close()
+	registrySrvURL = registrySrv.URL
+	regHost := strings.TrimPrefix(registrySrv.URL, "http://")
+
+	st, _ := store.Open(":memory:")
+	dcli := docker.NewClientForTest(dockerSrv.URL, dockerSrv.Client())
+	regHTTP := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	reg := registry.NewClientWithMirrorAndHTTP(true, regHost, regHTTP)
+	cfg := &config.Config{DefaultWatch: []string{"mysql:8"}, DisableDefault: false}
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, ""))
+
+	// 首扫：建立 up-to-date 基线，且无通知
+	sc.Run(context.Background())
+	img, _ := st.GetImageByRef("mysql:8")
+	if img == nil {
+		t.Fatal("mysql:8 not recorded")
+	}
+	if u, _ := st.UnreadCount(); u != 0 {
+		t.Fatalf("unread after baseline = %d, want 0", u)
+	}
+
+	// 用户忽略该镜像（仍扫描不提醒）
+	if err := st.SetIgnored(img.ID, true); err != nil {
+		t.Fatalf("set ignored: %v", err)
+	}
+
+	// 远端更新，再次扫描：应 update-available，但不得产生通知
+	remoteDigest = "bbbbbb"
+	sc.Run(context.Background())
+
+	img2, _ := st.GetImageByRef("mysql:8")
+	if img2.Status != models.StatusUpdateAvailable {
+		t.Errorf("status = %q, want %q (ignored should still scan & update status)", img2.Status, models.StatusUpdateAvailable)
+	}
+	if !img2.Ignored {
+		t.Error("ignored flag lost after scan (Upsert must not reset it)")
+	}
+	if u, _ := st.UnreadCount(); u != 0 {
+		t.Errorf("unread = %d, want 0 (ignored image must not notify)", u)
+	}
+	if notifs, _ := st.ListNotifications(false); len(notifs) != 0 {
+		t.Errorf("notifications = %d, want 0 for ignored image", len(notifs))
+	}
+}

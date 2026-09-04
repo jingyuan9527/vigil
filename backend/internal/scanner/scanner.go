@@ -141,29 +141,32 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 		_ = s.store.AddVersion(img.ID, remote, ref.Tag)
 	}
 
-	// 仅在真正发生变化（非首次）时通知，避免首扫噪声
+	// 仅在真正发生变化（非首次）时通知，避免首扫噪声。
+	// 被用户忽略的镜像（Ignored）仍会扫描、状态照常更新为有更新，但不再产生系统/钉钉通知。
 	if rerr == nil && changed {
-		msg := fmt.Sprintf("镜像 %s 检测到新版本（远端摘要已变更）", j.reference)
-		_ = s.store.CreateNotification(&models.Notification{
-			ImageID:    img.ID,
-			ImageName:  ref.Repo,
-			Reference:  j.reference,
-			OldDigest:  prevRemote,
-			NewDigest:  remote,
-			OldTag:     ref.Tag,
-			NewTag:     ref.Tag,
-			Message:    msg,
-		})
+		ignored := existing != nil && existing.Ignored
+		if !ignored {
+			msg := fmt.Sprintf("镜像 %s 检测到新版本（远端摘要已变更）", j.reference)
+			_ = s.store.CreateNotification(&models.Notification{
+				ImageID:    img.ID,
+				ImageName:  ref.Repo,
+				Reference:  j.reference,
+				OldDigest:  prevRemote,
+				NewDigest:  remote,
+				OldTag:     ref.Tag,
+				NewTag:     ref.Tag,
+				Message:    msg,
+			})
 
-		// 钉钉通知
-		if webhook := s.settings.Snapshot().DingTalkWebhook; webhook != "" {
-			go func() {
-				if err := notification.NotifyUpdate(webhook, j.reference, prevRemote, remote); err != nil {
-					log.Printf("dingtalk notify failed for %s: %v", j.reference, err)
-				}
-			}()
+			// 钉钉通知
+			if webhook := s.settings.Snapshot().DingTalkWebhook; webhook != "" {
+				go func() {
+					if err := notification.NotifyUpdate(webhook, j.reference, prevRemote, remote); err != nil {
+						log.Printf("dingtalk notify failed for %s: %v", j.reference, err)
+					}
+				}()
+			}
 		}
-
 		return true, nil
 	}
 	return false, nil

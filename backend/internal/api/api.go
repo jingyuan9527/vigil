@@ -247,12 +247,31 @@ func (a *api) handleImages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) handleImageByID(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/images/")
-	id, err := strconv.ParseInt(strings.Trim(idStr, "/"), 10, 64)
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/images/"), "/")
+	parts := strings.Split(rest, "/")
+	id, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
+
+	// 子资源：PUT /api/images/{id}/ignored  设置/取消忽略（仍扫描不提醒）
+	if len(parts) >= 2 && parts[1] == "ignored" && r.Method == http.MethodPut {
+		var body struct {
+			Ignored bool `json:"ignored"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+			return
+		}
+		if err := a.store.SetIgnored(id, body.Ignored); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ignored": body.Ignored})
+		return
+	}
+
 	img, err := a.store.GetImage(id)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
