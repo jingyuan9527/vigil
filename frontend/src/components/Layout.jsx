@@ -6,9 +6,9 @@ import { useAuth } from '../context/AuthContext'
 
 const nav = [
   { to: '/', label: '仪表盘', icon: GridIcon, end: true },
-  { to: '/images', label: '镜像列表', icon: BoxIcon },
-  { to: '/compare', label: '版本对比', icon: GitIcon },
-  { to: '/notifications', label: '更新通知', icon: BellIcon },
+  { to: '/images', label: '镜像', icon: BoxIcon },
+  { to: '/compare', label: '对比', icon: GitIcon },
+  { to: '/notifications', label: '通知', icon: BellIcon },
   { to: '/settings', label: '设置', icon: GearIcon },
 ]
 
@@ -47,10 +47,10 @@ export default function Layout() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col overflow-hidden lg:flex-row">
-      {/* Sidebar */}
-      <aside className="flex shrink-0 flex-row gap-1 overflow-hidden border-b border-zinc-100 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900 lg:w-64 lg:flex-col lg:gap-2 lg:border-b-0 lg:border-r lg:px-5 lg:py-7">
-        <div className="mb-2 hidden items-center gap-2.5 lg:flex">
+    <div className="flex min-h-screen flex-col lg:flex-row">
+      {/* 桌面侧边栏（仅 lg 显示） */}
+      <aside className="hidden shrink-0 flex-col gap-3 border-r border-zinc-100 bg-white px-5 py-7 dark:border-zinc-800 dark:bg-zinc-900 lg:flex lg:w-64">
+        <div className="mb-2 flex items-center gap-2.5">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 text-white shadow-bento">
             <ShipIcon />
           </div>
@@ -60,7 +60,7 @@ export default function Layout() {
           </div>
         </div>
 
-        <nav className="flex flex-1 flex-row gap-1 lg:flex-col">
+        <nav className="mt-2 flex flex-1 flex-col gap-1.5">
           {nav.map((n) => (
             <NavLink
               key={n.to}
@@ -75,9 +75,9 @@ export default function Layout() {
               }
             >
               <n.icon />
-              <span className="whitespace-nowrap">{n.label}</span>
+              <span className="whitespace-nowrap">{n.label === '镜像' ? '镜像列表' : n.label === '对比' ? '版本对比' : n.label === '通知' ? '更新通知' : n.label}</span>
               {n.to === '/notifications' && unread > 0 && (
-                <span className="ml-auto rounded-full bg-orange-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                <span className="ml-auto rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
                   {unread}
                 </span>
               )}
@@ -87,24 +87,64 @@ export default function Layout() {
 
         <button
           onClick={toggle}
-          className="hidden items-center gap-2 rounded-xl px-3 py-2.5 text-sm text-zinc-500 transition-colors hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800 lg:flex"
+          className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-zinc-500 transition-colors hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
         >
           {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
           {theme === 'dark' ? '浅色模式' : '深色模式'}
         </button>
         <button
           onClick={logout}
-          className="hidden items-center gap-2 rounded-xl px-3 py-2.5 text-sm text-zinc-500 transition-colors hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800 lg:flex"
+          className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-zinc-500 transition-colors hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
         >
           <LogoutIcon />
           退出登录
         </button>
       </aside>
 
-      {/* Main */}
-      <main className="flex-1 overflow-hidden px-4 py-6 md:px-6 lg:px-8 lg:py-8">
+      {/* 移动端顶部精简条（仅 <lg） */}
+      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-zinc-100 bg-white px-4 dark:border-zinc-800 dark:bg-zinc-900 lg:hidden">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 text-white shadow-bento">
+            <ShipIcon />
+          </div>
+          <div className="leading-tight">
+            <div className="text-sm font-bold">DockMon</div>
+            <div className="text-[10px] text-zinc-400 dark:text-zinc-500">
+              最近扫描：{lastScan ? fmtTime(lastScan.started_at) : '暂无'}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={onScan}
+            disabled={scanning}
+            className="flex h-11 w-11 items-center justify-center rounded-xl text-zinc-500 transition-colors hover:bg-zinc-100 disabled:opacity-60 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            aria-label="立即扫描"
+          >
+            <RefreshIcon spin={scanning} />
+          </button>
+          <button
+            onClick={toggle}
+            className="flex h-11 w-11 items-center justify-center rounded-xl text-zinc-500 transition-colors hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            aria-label="切换主题"
+          >
+            {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+          </button>
+          <button
+            onClick={logout}
+            className="flex h-11 w-11 items-center justify-center rounded-xl text-zinc-500 transition-colors hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            aria-label="退出登录"
+          >
+            <LogoutIcon />
+          </button>
+        </div>
+      </header>
+
+      {/* 主内容 */}
+      <main className="flex-1 overflow-hidden px-4 py-6 pb-24 md:px-6 lg:px-8 lg:py-8 lg:pb-8">
         <div className="mx-auto max-w-6xl">
-          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-zinc-100 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
+          {/* 桌面：最近扫描 + 扫描/主题（移动端已在顶栏） */}
+          <div className="mb-6 hidden items-center justify-between gap-3 rounded-2xl border border-zinc-100 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900 lg:flex">
             <div className="text-xs text-zinc-400 dark:text-zinc-500">
               最近扫描：
               <span className="font-medium text-zinc-600 dark:text-zinc-300">
@@ -118,10 +158,10 @@ export default function Layout() {
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               <button
                 onClick={toggle}
-                className="rounded-xl border border-zinc-200 p-2 text-zinc-500 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 lg:hidden"
+                className="flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-200 text-zinc-500 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
                 aria-label="切换主题"
               >
                 {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
@@ -129,7 +169,7 @@ export default function Layout() {
               <button
                 onClick={onScan}
                 disabled={scanning}
-                className="inline-flex items-center gap-2 rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-60 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
+                className="inline-flex h-10 items-center gap-3 rounded-xl bg-zinc-900 px-4 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-60 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
               >
                 <RefreshIcon spin={scanning} />
                 {scanning ? '扫描中…' : '立即扫描'}
@@ -140,6 +180,34 @@ export default function Layout() {
           <Outlet context={{ refreshNotifs: refresh, navigate }} />
         </div>
       </main>
+
+      {/* 移动端底部 5 项 Tab 栏（仅 <lg） */}
+      <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-zinc-100 bg-white pb-[env(safe-area-inset-bottom)] dark:border-zinc-800 dark:bg-zinc-900 lg:hidden">
+        {nav.map((n) => (
+          <NavLink
+            key={n.to}
+            to={n.to}
+            end={n.end}
+            className={({ isActive }) =>
+              `group relative flex flex-1 flex-col items-center justify-center gap-1.5 py-2 min-h-[56px] text-xs font-medium transition-colors ${
+                isActive
+                  ? 'text-blue-600 dark:text-blue-400'
+                  : 'text-zinc-400 dark:text-zinc-500'
+              }`
+            }
+          >
+            <span className="relative">
+              <n.icon />
+              {n.to === '/notifications' && unread > 0 && (
+                <span className="absolute -right-2 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-white">
+                  {unread}
+                </span>
+              )}
+            </span>
+            {n.label}
+          </NavLink>
+        ))}
+      </nav>
     </div>
   )
 }
@@ -154,7 +222,7 @@ function ShipIcon() {
 }
 function GridIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" />
       <rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" />
     </svg>
@@ -162,14 +230,14 @@ function GridIcon() {
 }
 function BoxIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 8 12 3 3 8v8l9 5 9-5V8Z" /><path d="m3 8 9 5 9-5" /><path d="M12 13v8" />
     </svg>
   )
 }
 function GitIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="6" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" /><circle cx="18" cy="12" r="2.5" />
       <path d="M6 8.5v7" /><path d="M18 9.5a3.5 3.5 0 0 0-3.5-3.5H9" />
     </svg>
@@ -177,7 +245,7 @@ function GitIcon() {
 }
 function BellIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
     </svg>
   )
@@ -205,7 +273,7 @@ function RefreshIcon({ spin }) {
 }
 function GearIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
     </svg>

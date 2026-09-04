@@ -10,7 +10,7 @@ export default function Pagination({ page, total, pageSize = 12, onChange }) {
   const to = Math.min(cur * pageSize, total)
 
   const btn =
-    'inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-lg px-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40'
+    'inline-flex h-9 min-w-9 items-center justify-center rounded-xl px-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40'
   const ghost = 'text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800'
   const active = 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
   const ellipsis = 'px-1 text-zinc-300 dark:text-zinc-600'

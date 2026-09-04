@@ -26,6 +26,15 @@ body {
   overflow-x: hidden;
 }
 
+/* 键盘焦点环（规范 §4.5 / 可访问性） */
+@layer base {
+  :focus-visible {
+    outline: 2px solid theme('colors.blue.500');
+    outline-offset: 2px;
+    border-radius: 0.5rem;
+  }
+}
+
 /* ---------- Bento Grid 设计令牌（源自 stylekit.top/bento-grid） ---------- */
 .bento-grid {
   display: grid;

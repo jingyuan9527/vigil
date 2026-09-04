@@ -179,7 +179,7 @@ export default function Settings() {
                 type="button"
                 onClick={onTestDingTalk}
                 disabled={testing || !form.dingtalk_webhook.trim()}
-                className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                className="inline-flex items-center gap-3 rounded-xl border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
               >
                 {testing ? '测试中…' : '测试连接'}
               </button>
@@ -188,7 +188,7 @@ export default function Settings() {
                   className={`ml-3 text-sm ${
                     testMsg.type === 'ok'
                       ? 'text-emerald-600 dark:text-emerald-400'
-                      : 'text-red-600 dark:text-red-400'
+                      : 'text-rose-600 dark:text-rose-400'
                   }`}
                 >
                   {testMsg.text}
@@ -203,18 +203,18 @@ export default function Settings() {
             className={`rounded-xl px-4 py-2 text-sm ${
               msg.type === 'ok'
                 ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
-                : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+                : 'bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300'
             }`}
           >
             {msg.text}
           </div>
         )}
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             type="submit"
             disabled={saving}
-            className="inline-flex items-center gap-2 rounded-xl bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-60 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
+            className="inline-flex items-center gap-3 rounded-xl bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-60 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
           >
             {saving ? '保存中…' : '保存设置'}
           </button>

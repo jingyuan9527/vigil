@@ -4,10 +4,12 @@ import BentoCard from '../components/BentoCard'
 import StatusBadge from '../components/StatusBadge'
 import Spinner from '../components/Spinner'
 import Pagination from '../components/Pagination'
+import { useToast } from '../components/Toast'
 
 const PAGE_SIZE = 10
 
 export default function Notifications() {
+  const toast = useToast()
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [unreadOnly, setUnreadOnly] = useState(false)
@@ -34,12 +36,21 @@ export default function Notifications() {
   }, [unreadOnly])
 
   const markRead = async (id) => {
-    await api.markRead(id)
-    load()
+    try {
+      await api.markRead(id)
+      load()
+    } catch {
+      toast('error', '标记失败，请重试')
+    }
   }
   const markAll = async () => {
-    await api.markAllRead()
-    load()
+    try {
+      await api.markAllRead()
+      load()
+      toast('success', '已将全部通知标记为已读')
+    } catch {
+      toast('error', '操作失败，请重试')
+    }
   }
 
   const unread = items.filter((i) => !i.read).length
@@ -61,7 +72,7 @@ export default function Notifications() {
           <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 md:text-3xl">更新通知</h1>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">检测到镜像远端摘要变化时生成的更新提醒。</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <button
             onClick={() => setUnreadOnly((v) => !v)}
             className={`rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
@@ -84,11 +95,11 @@ export default function Notifications() {
       <div className="bento-grid">
         <BentoCard>
           <div className="text-sm text-zinc-500 dark:text-zinc-400">通知总数</div>
-          <div className="mt-2 text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">{items.length}</div>
+          <div className="mt-2 text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 tabular-nums">{items.length}</div>
         </BentoCard>
         <BentoCard>
           <div className="text-sm text-zinc-500 dark:text-zinc-400">未读</div>
-          <div className="mt-2 text-3xl font-bold tracking-tight text-orange-500">{unread}</div>
+          <div className="mt-2 text-3xl font-bold tracking-tight text-amber-500 tabular-nums">{unread}</div>
         </BentoCard>
         <BentoCard span="wide" className="flex items-center justify-between">
           <div>
@@ -102,7 +113,19 @@ export default function Notifications() {
       {loading ? (
         <Spinner label="加载通知…" />
       ) : items.length === 0 ? (
-        <BentoCard className="text-center text-sm text-zinc-400 dark:text-zinc-500">暂无通知</BentoCard>
+        <BentoCard className="py-10 text-center">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+            </svg>
+          </div>
+          <p className="mt-4 text-sm font-medium text-zinc-600 dark:text-zinc-300">
+            {unreadOnly ? '没有未读通知' : '暂无通知'}
+          </p>
+          <p className="mt-1 text-sm text-zinc-400 dark:text-zinc-500">
+            {unreadOnly ? '镜像更新时会产生提醒，可在镜像列表查看状态。' : '镜像远端摘要变化时会在这里生成提醒，一切正常。'}
+          </p>
+        </BentoCard>
       ) : (
         <>
           <div className="space-y-3">
@@ -110,22 +133,22 @@ export default function Notifications() {
             <BentoCard key={n.id} className={n.read ? 'opacity-60' : ''}>
               <div className="flex flex-wrap items-start justify-between gap-3 overflow-hidden">
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-3">
                     <span className="truncate text-base font-semibold text-zinc-900 dark:text-zinc-100">{n.reference}</span>
                     {n.type === 'new-tag' ? (
                       <span className="shrink-0 rounded-md bg-blue-100 px-1.5 py-0.5 text-[11px] font-medium text-blue-700 dark:bg-blue-500/15 dark:text-blue-300">
                         可选更新
                       </span>
                     ) : (
-                      <span className="shrink-0 rounded-md bg-orange-100 px-1.5 py-0.5 text-[11px] font-medium text-orange-700 dark:bg-orange-500/15 dark:text-orange-300">
+                      <span className="shrink-0 rounded-md bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">
                         有新版本
                       </span>
                     )}
-                    {!n.read && <span className="h-2 w-2 shrink-0 rounded-full bg-orange-500" />}
+                    {!n.read && <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />}
                   </div>
                   <p className="mt-1.5 text-sm text-zinc-600 dark:text-zinc-300">{n.message}</p>
                   {n.type === 'new-tag' ? (
-                    <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-blue-50/70 px-3 py-2 dark:bg-blue-500/10">
+                    <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl bg-blue-50/70 px-3 py-2 dark:bg-blue-500/10">
                       <div className="flex items-center gap-1.5 text-xs">
                         <span className="text-zinc-400">当前</span>
                         <span className="font-mono text-zinc-600 dark:text-zinc-300">{n.old_tag || '—'}</span>
@@ -137,7 +160,7 @@ export default function Notifications() {
                       </div>
                     </div>
                   ) : (
-                    <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800/50">
+                    <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl bg-zinc-50 px-3 py-2 dark:bg-zinc-800/50">
                       <div className="flex items-center gap-1.5 text-xs">
                         <span className="text-zinc-400">旧</span>
                         <span className="font-mono text-zinc-500 dark:text-zinc-400">{shortDigest(n.old_digest)}</span>
@@ -154,7 +177,7 @@ export default function Notifications() {
                 {!n.read && (
                   <button
                     onClick={() => markRead(n.id)}
-                    className="shrink-0 rounded-xl border border-zinc-200 px-3 py-1.5 text-sm text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                    className="mt-3 w-full shrink-0 rounded-xl border border-zinc-200 px-3 py-1.5 text-sm text-zinc-700 transition-colors hover:bg-zinc-50 sm:mt-0 sm:w-auto dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
                   >
                     标记已读
                   </button>

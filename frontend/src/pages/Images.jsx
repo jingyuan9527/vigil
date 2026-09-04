@@ -5,6 +5,8 @@ import BentoCard from '../components/BentoCard'
 import StatusBadge from '../components/StatusBadge'
 import Spinner from '../components/Spinner'
 import Pagination from '../components/Pagination'
+import ConfirmDialog from '../components/ConfirmDialog'
+import { useToast } from '../components/Toast'
 
 const FILTERS = [
   { key: '', label: '全部' },
@@ -18,6 +20,7 @@ const PAGE_SIZE = 12
 
 export default function Images() {
   const navigate = useNavigate()
+  const toast = useToast()
   const [images, setImages] = useState([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('')
@@ -25,8 +28,7 @@ export default function Images() {
   const [page, setPage] = useState(1)
   const [newRef, setNewRef] = useState('')
   const [adding, setAdding] = useState(false)
-  const [err, setErr] = useState('')
-  const [confirmId, setConfirmId] = useState(null) // 待页内确认移除的镜像 id
+  const [confirmId, setConfirmId] = useState(null) // 待确认移除的镜像 id
 
   const load = async () => {
     setLoading(true)
@@ -73,34 +75,46 @@ export default function Images() {
     })
   }
 
-
   const onAdd = async (e) => {
     e.preventDefault()
-    setErr('')
     if (!newRef.trim()) return
     setAdding(true)
     try {
       await api.addImage(newRef.trim())
       setNewRef('')
       await load()
+      toast('success', `已添加监控：${newRef.trim()}`)
     } catch {
-      setErr('添加失败，请确认引用格式（如 nginx:latest）')
+      toast('error', '添加失败，请确认引用格式（如 nginx:latest）')
     } finally {
       setAdding(false)
     }
   }
 
   const onRemove = async (id) => {
-    await api.removeImage(id)
-    setConfirmId(null)
-    await load()
+    try {
+      await api.removeImage(id)
+      setConfirmId(null)
+      await load()
+      toast('success', '已移除该镜像')
+    } catch {
+      setConfirmId(null)
+      toast('error', '移除失败，请重试')
+    }
   }
 
   // 忽略 = 仍扫描但不提醒（B 语义）。忽略后状态照常更新，只是不再产生系统/钉钉通知。
   const onToggleIgnore = async (img) => {
-    await api.setIgnored(img.id, !img.ignored)
-    await load()
+    try {
+      await api.setIgnored(img.id, !img.ignored)
+      await load()
+      toast('success', img.ignored ? '已恢复该镜像的更新提醒' : '已忽略该镜像的更新提醒')
+    } catch {
+      toast('error', '操作失败，请重试')
+    }
   }
+
+  const confirmImg = images.find((i) => i.id === confirmId)
 
   return (
     <div className="img-list-top space-y-6 overflow-hidden">
@@ -109,55 +123,97 @@ export default function Images() {
           <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 md:text-3xl">镜像列表</h1>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">所有被监控的镜像引用及其版本状态。</p>
         </div>
-        <form onSubmit={onAdd} className="flex min-w-0 items-center gap-2">
+        <form onSubmit={onAdd} className="flex min-w-0 items-center gap-3">
           <input
             value={newRef}
             onChange={(e) => setNewRef(e.target.value)}
             placeholder="新增监控，如 redis:7"
             className="min-w-0 flex-1 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm outline-none transition-all focus:border-bento-accent focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
           />
-          <button disabled={adding} className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-60 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200">
+          <button disabled={adding} className="shrink-0 rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-60 active:scale-95 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200">
             {adding ? '添加中…' : '添加'}
           </button>
         </form>
       </div>
 
-      {err && <div className="rounded-xl bg-rose-50 px-4 py-2 text-sm text-rose-600 dark:bg-rose-500/10 dark:text-rose-300">{err}</div>}
-
-      <div className="flex flex-wrap items-center gap-2 overflow-hidden">
-        {FILTERS.map((f) => (
-          <button
-            key={f.key}
-            onClick={() => setFilter(f.key)}
-            className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${
-              filter === f.key
-                ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
-                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300'
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
+      {/* 筛选 chips（移动端横向滚动）+ 搜索（移动端全宽） */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex gap-3 overflow-x-auto pb-1 sm:pb-0">
+          {FILTERS.map((f) => (
+            <button
+              key={f.key}
+              onClick={() => setFilter(f.key)}
+              className={`shrink-0 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${
+                filter === f.key
+                  ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
+                  : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="搜索引用…"
-          className="ml-auto w-full max-w-[11rem] rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-sm outline-none transition-all focus:border-bento-accent focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+          className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-sm outline-none transition-all focus:border-bento-accent focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 sm:w-64 sm:shrink-0"
         />
       </div>
 
       {loading ? (
         <Spinner label="加载镜像…" />
+      ) : images.length === 0 ? (
+        <BentoCard className="py-10 text-center">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 8 12 3 3 8v8l9 5 9-5V8Z" /><path d="m3 8 9 5 9-5" /><path d="M12 13v8" />
+            </svg>
+          </div>
+          <p className="mt-4 text-sm font-medium text-zinc-600 dark:text-zinc-300">尚未添加任何镜像</p>
+          <p className="mx-auto mt-1 max-w-xs text-sm text-zinc-400 dark:text-zinc-500">
+            使用右上角输入框添加引用（如 nginx:latest、redis:7），保存后即可开始监控版本变化。
+          </p>
+        </BentoCard>
       ) : filtered.length === 0 ? (
-        <BentoCard className="text-center text-sm text-zinc-400 dark:text-zinc-500">没有匹配的镜像</BentoCard>
+        <BentoCard className="py-10 text-center">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
+            </svg>
+          </div>
+          <p className="mt-4 text-sm font-medium text-zinc-600 dark:text-zinc-300">没有匹配的镜像</p>
+          <p className="mt-1 text-sm text-zinc-400 dark:text-zinc-500">调整筛选条件或搜索词后再试。</p>
+        </BentoCard>
       ) : (
         <>
+          {/* 监控概览：整行宽卡（规范 §5.3，保持 Bento 尺寸非全等） */}
+          <BentoCard>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">监控概览</h3>
+              <span className="text-xs text-zinc-400 dark:text-zinc-500">当前匹配 {filtered.length} 个</span>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {[
+                { label: '有更新', v: countStatus(filtered, 'update-available'), cls: 'bg-amber-500' },
+                { label: '已是最新', v: countStatus(filtered, 'up-to-date'), cls: 'bg-emerald-500' },
+                { label: '未知', v: countStatus(filtered, 'unknown'), cls: 'bg-zinc-400' },
+                { label: '缺失', v: countStatus(filtered, 'stale'), cls: 'bg-rose-500' },
+              ].map((s) => (
+                <div key={s.label} className="flex items-center gap-3">
+                  <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${s.cls}`} />
+                  <span className="text-sm text-zinc-500 dark:text-zinc-400">{s.label}</span>
+                  <span className="ml-auto text-lg font-bold tabular-nums text-zinc-900 dark:text-zinc-100">{s.v}</span>
+                </div>
+              ))}
+            </div>
+          </BentoCard>
           <div className="bento-grid">
             {pageItems.map((img) => (
             <BentoCard key={img.id} className={`group flex flex-col ${img.ignored ? 'ring-1 ring-zinc-300/70 dark:ring-zinc-600/60' : ''}`}>
-              <div className="flex items-start justify-between gap-2">
+              <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2.5">
                     <span className="truncate text-base font-semibold text-zinc-900 dark:text-zinc-100" title={img.reference}>
                       {img.reference}
                     </span>
@@ -190,50 +246,31 @@ export default function Images() {
                 <div className="mb-3 text-xs text-zinc-400">
                   {img.last_check ? fmtTime(img.last_check) : '未扫描'}
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-3">
                   <button
                     onClick={() => navigate('/compare?id=' + img.id)}
-                    className="flex-1 rounded-xl border border-zinc-200 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:hover:border-zinc-600"
+                    className="flex-1 rounded-xl border border-zinc-200 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:border-zinc-300 active:scale-95 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:hover:border-zinc-600"
                   >
                     版本对比
                   </button>
                 </div>
-                <div className="mt-2 flex gap-2">
-                  {confirmId === img.id ? (
-                    <>
-                      <button
-                        onClick={() => setConfirmId(null)}
-                        className="flex-1 rounded-xl border border-zinc-200 py-1.5 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                      >
-                        取消
-                      </button>
-                      <button
-                        onClick={() => onRemove(img.id)}
-                        className="flex-1 rounded-xl bg-rose-500 py-1.5 text-sm font-medium text-white transition-colors hover:bg-rose-600"
-                      >
-                        确认移除
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => onToggleIgnore(img)}
-                        className={`flex-1 rounded-xl border py-1.5 text-sm font-medium transition-colors ${
-                          img.ignored
-                            ? 'border-emerald-300 text-emerald-600 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-500/10'
-                            : 'border-zinc-200 text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200'
-                        }`}
-                      >
-                        {img.ignored ? '恢复提醒' : '忽略'}
-                      </button>
-                      <button
-                        onClick={() => setConfirmId(img.id)}
-                        className="rounded-xl border border-zinc-200 px-3 py-1.5 text-sm text-zinc-400 transition-colors hover:bg-rose-50 hover:text-rose-500 hover:border-rose-200 dark:border-zinc-700 dark:hover:bg-rose-500/10 dark:hover:text-rose-400 dark:hover:border-rose-800"
-                      >
-                        移除
-                      </button>
-                    </>
-                  )}
+                <div className="mt-3 flex gap-3">
+                  <button
+                    onClick={() => onToggleIgnore(img)}
+                    className={`flex-1 rounded-xl border py-1.5 text-sm font-medium transition-colors active:scale-95 ${
+                      img.ignored
+                        ? 'border-emerald-300 text-emerald-600 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-500/10'
+                        : 'border-zinc-200 text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200'
+                    }`}
+                  >
+                    {img.ignored ? '恢复提醒' : '忽略'}
+                  </button>
+                  <button
+                    onClick={() => setConfirmId(img.id)}
+                    className="shrink-0 rounded-xl border border-zinc-200 px-3 py-1.5 text-sm text-zinc-400 transition-colors hover:bg-rose-50 hover:text-rose-500 hover:border-rose-200 active:scale-95 dark:border-zinc-700 dark:hover:bg-rose-500/10 dark:hover:text-rose-400 dark:hover:border-rose-800"
+                  >
+                    移除
+                  </button>
                 </div>
               </div>
             </BentoCard>
@@ -242,15 +279,29 @@ export default function Images() {
           <Pagination page={page} total={total} pageSize={PAGE_SIZE} onChange={goPage} />
         </>
       )}
+
+      <ConfirmDialog
+        open={confirmId !== null}
+        title="移除镜像"
+        description={confirmImg ? `确定要将「${confirmImg.reference}」从监控中移除吗？此操作不可撤销，本地与远端摘要记录将被删除。` : '确定要移除该镜像吗？'}
+        confirmText="确认移除"
+        danger
+        onConfirm={() => confirmId !== null && onRemove(confirmId)}
+        onCancel={() => setConfirmId(null)}
+      />
     </div>
   )
 }
 
+function countStatus(list, status) {
+  return list.reduce((n, i) => n + (i.status === status ? 1 : 0), 0)
+}
+
 function DigestRow({ label, value }) {
   return (
-    <div className="flex items-center justify-between gap-2">
+    <div className="flex items-center justify-between gap-3">
       <span className="shrink-0 text-zinc-400">{label}</span>
-      <span className="truncate font-mono text-zinc-600 dark:text-zinc-300">{value}</span>
+      <span className="truncate font-mono text-zinc-600 dark:text-zinc-300" title={value}>{value}</span>
     </div>
   )
 }

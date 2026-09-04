@@ -41,7 +41,7 @@ export default function Dashboard() {
   const updates = images.filter((i) => i.status === 'update-available')
   const dist = [
     { label: '已是最新', v: stats.up_to_date, color: 'bg-emerald-500' },
-    { label: '有更新', v: stats.update_available, color: 'bg-orange-500' },
+    { label: '有更新', v: stats.update_available, color: 'bg-amber-500' },
     { label: '未知', v: stats.unknown, color: 'bg-zinc-300 dark:bg-zinc-600' },
   ]
   const totalDist = dist.reduce((a, b) => a + b.v, 0) || 1
@@ -61,26 +61,39 @@ export default function Dashboard() {
               <div className="inline-flex rounded-xl bg-white/15 px-2.5 py-1 text-xs font-medium">系统状态</div>
               <h2 className="mt-4 text-2xl font-bold md:text-3xl">Docker 镜像监控总览</h2>
               <p className="mt-2 max-w-md text-sm text-white/80">
-                自动采集本地与注册表镜像，比对摘要并推送更新提醒。当前共监控
-                <span className="mx-1 font-semibold">{stats.total}</span>
-                个镜像引用。
+                {stats.total === 0
+                  ? '尚未添加任何监控镜像。前往镜像列表添加引用（如 nginx:latest），即可开始比对本地与注册表摘要并推送更新提醒。'
+                  : '自动采集本地与注册表镜像，比对摘要并推送更新提醒。当前共监控'}
+                {stats.total > 0 && <span className="mx-1 font-semibold">{stats.total}</span>}
+                {stats.total > 0 && '个镜像引用。'}
               </p>
             </div>
-            <div className="mt-6 grid grid-cols-3 gap-3">
-              <Mini label="最新" value={stats.up_to_date} />
-              <Mini label="待更新" value={stats.update_available} />
-              <Mini label="未读" value={stats.unread_notifications} />
+            <div className="mt-6">
+              {stats.total === 0 ? (
+                <button
+                  onClick={() => navigate('/images')}
+                  className="inline-flex items-center rounded-xl bg-white px-4 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-white/90 active:scale-95"
+                >
+                  去添加第一个镜像
+                </button>
+              ) : (
+                <div className="grid grid-cols-3 gap-3">
+                  <Mini label="最新" value={stats.up_to_date} />
+                  <Mini label="待更新" value={stats.update_available} />
+                  <Mini label="未读" value={stats.unread_notifications} />
+                </div>
+              )}
             </div>
           </div>
         </BentoCard>
 
-        <StatCard label="监控镜像总数" value={stats.total} gradient="from-blue-500 to-cyan-500"
+        <StatCard label="监控镜像总数" value={stats.total} gradient="from-blue-500 to-violet-600"
           icon={<IconBox path={<><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>} />} />
         <StatCard label="有更新可用" value={stats.update_available} gradient="from-orange-400 to-pink-500"
           icon={<IconBox path={<><path d="M12 2v8" /><path d="m8 6 4-4 4 4" /><circle cx="12" cy="15" r="6" /><path d="M12 12v6" /></>} />} />
-        <StatCard label="已是最新" value={stats.up_to_date} gradient="from-emerald-400 to-green-500"
+        <StatCard label="已是最新" value={stats.up_to_date} gradient="from-green-400 to-cyan-500"
           icon={<IconBox path={<><path d="M20 6 9 17l-5-5" /></>} />} />
-        <StatCard label="未读通知" value={stats.unread_notifications} gradient="from-purple-500 to-fuchsia-500"
+        <StatCard label="未读通知" value={stats.unread_notifications} gradient="from-blue-500 to-violet-600"
           icon={<IconBox path={<><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" /></>} />} />
 
         {/* 状态分布 */}
@@ -89,7 +102,7 @@ export default function Dashboard() {
             <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">状态分布</h3>
             <span className="text-xs text-zinc-400 dark:text-zinc-500">共 {totalDist} 个镜像</span>
           </div>
-          <div className="flex h-3 w-full gap-0.5 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+          <div className="flex h-3 w-full gap-0 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
             {dist.map((d, i) => (
               <div
                 key={d.label}
@@ -103,7 +116,7 @@ export default function Dashboard() {
           </div>
           <div className="mt-4 grid grid-cols-3 gap-3">
             {dist.map((d) => (
-              <div key={d.label} className="flex items-center gap-2 text-sm">
+              <div key={d.label} className="flex items-center gap-2.5 text-sm">
                 <span className={`h-2.5 w-2.5 rounded-full ${d.color}`} />
                 <span className="text-zinc-600 dark:text-zinc-300">{d.label}</span>
                 <span className="ml-auto font-semibold text-zinc-900 dark:text-zinc-100">{d.v}</span>
@@ -123,8 +136,8 @@ export default function Dashboard() {
               <p className="py-8 text-center text-sm text-zinc-400 dark:text-zinc-500">暂无更新动态</p>
             )}
             {updates.slice(0, 5).map((i) => (
-              <div key={i.id} className="group/item rounded-xl border border-zinc-100 p-3 transition-colors hover:border-zinc-200 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:border-zinc-700 dark:hover:bg-zinc-800/50">
-                <div className="flex items-center justify-between gap-2">
+              <div key={i.id} className="rounded-xl p-3 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+                <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium text-zinc-800 dark:text-zinc-100">{i.reference}</div>
                     <div className="mt-1 font-mono text-[11px] text-zinc-400">
@@ -136,7 +149,7 @@ export default function Dashboard() {
               </div>
             ))}
             {notifs.slice(0, 3).map((n) => (
-              <div key={n.id} className="rounded-xl border border-zinc-100 p-3 dark:border-zinc-800">
+              <div key={n.id} className="rounded-xl p-3 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
                 <div className="truncate text-sm font-medium text-zinc-800 dark:text-zinc-100">{n.reference}</div>
                 <div className="mt-1 text-xs text-zinc-400">{fmtTime(n.created_at)}</div>
               </div>
@@ -164,7 +177,7 @@ export default function Dashboard() {
 function Mini({ label, value }) {
   return (
     <div className="rounded-xl bg-white/10 p-3 text-center">
-      <div className="text-2xl font-bold">{value}</div>
+      <div className="text-2xl font-bold tabular-nums">{value}</div>
       <div className="text-xs text-white/70">{label}</div>
     </div>
   )
