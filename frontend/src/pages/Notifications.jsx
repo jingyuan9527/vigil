@@ -112,20 +112,43 @@ export default function Notifications() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate text-base font-semibold text-zinc-900 dark:text-zinc-100">{n.reference}</span>
+                    {n.type === 'new-tag' ? (
+                      <span className="shrink-0 rounded-md bg-blue-100 px-1.5 py-0.5 text-[11px] font-medium text-blue-700 dark:bg-blue-500/15 dark:text-blue-300">
+                        可选更新
+                      </span>
+                    ) : (
+                      <span className="shrink-0 rounded-md bg-orange-100 px-1.5 py-0.5 text-[11px] font-medium text-orange-700 dark:bg-orange-500/15 dark:text-orange-300">
+                        有新版本
+                      </span>
+                    )}
                     {!n.read && <span className="h-2 w-2 shrink-0 rounded-full bg-orange-500" />}
                   </div>
                   <p className="mt-1.5 text-sm text-zinc-600 dark:text-zinc-300">{n.message}</p>
-                  <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800/50">
-                    <div className="flex items-center gap-1.5 text-xs">
-                      <span className="text-zinc-400">旧</span>
-                      <span className="font-mono text-zinc-500 dark:text-zinc-400">{shortDigest(n.old_digest)}</span>
+                  {n.type === 'new-tag' ? (
+                    <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-blue-50/70 px-3 py-2 dark:bg-blue-500/10">
+                      <div className="flex items-center gap-1.5 text-xs">
+                        <span className="text-zinc-400">当前</span>
+                        <span className="font-mono text-zinc-600 dark:text-zinc-300">{n.old_tag || '—'}</span>
+                      </div>
+                      <span className="text-zinc-300 dark:text-zinc-600">→ 可选</span>
+                      <div className="flex items-center gap-1.5 text-xs">
+                        <span className="text-blue-600 dark:text-blue-300">升级到</span>
+                        <span className="font-mono font-medium text-blue-700 dark:text-blue-300">{n.new_tag}</span>
+                      </div>
                     </div>
-                    <span className="text-zinc-300 dark:text-zinc-600">→</span>
-                    <div className="flex items-center gap-1.5 text-xs">
-                      <span className="text-zinc-400">新</span>
-                      <span className="font-mono text-zinc-500 dark:text-zinc-400">{shortDigest(n.new_digest)}</span>
+                  ) : (
+                    <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800/50">
+                      <div className="flex items-center gap-1.5 text-xs">
+                        <span className="text-zinc-400">旧</span>
+                        <span className="font-mono text-zinc-500 dark:text-zinc-400">{shortDigest(n.old_digest)}</span>
+                      </div>
+                      <span className="text-zinc-300 dark:text-zinc-600">→</span>
+                      <div className="flex items-center gap-1.5 text-xs">
+                        <span className="text-zinc-400">新</span>
+                        <span className="font-mono text-zinc-500 dark:text-zinc-400">{shortDigest(n.new_digest)}</span>
+                      </div>
                     </div>
-                  </div>
+                  )}
                   <div className="mt-2 text-xs text-zinc-400">{fmtTime(n.created_at)}</div>
                 </div>
                 {!n.read && (

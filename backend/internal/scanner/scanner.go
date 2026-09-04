@@ -13,6 +13,7 @@ import (
 	"dockmon/internal/notification"
 	"dockmon/internal/registry"
 	"dockmon/internal/store"
+	"dockmon/internal/version"
 )
 
 // Scanner 负责采集镜像、检测远端版本变化并生成通知。
@@ -141,8 +142,9 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 		_ = s.store.AddVersion(img.ID, remote, ref.Tag)
 	}
 
-	// 仅在真正发生变化（非首次）时通知，避免首扫噪声。
-	// 被用户忽略的镜像（Ignored）仍会扫描、状态照常更新为有更新，但不再产生系统/钉钉通知。
+	// 强更新：同一 tag 的远端 digest 发生变化（非首次）时通知，避免首扫噪声。
+	// 被用户忽略的镜像（Ignored）仍会扫描、状态照常更新，但不再产生系统/钉钉通知。
+	found := false
 	if rerr == nil && changed {
 		ignored := existing != nil && existing.Ignored
 		if !ignored {
@@ -155,6 +157,7 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 				NewDigest:  remote,
 				OldTag:     ref.Tag,
 				NewTag:     ref.Tag,
+				Type:       models.NotifUpdate,
 				Message:    msg,
 			})
 
@@ -166,10 +169,61 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 					}
 				}()
 			}
+			found = true
 		}
-		return true, nil
 	}
-	return false, nil
+
+	// 弱提醒：仓库出现比当前固定 tag 更高的独立版本（如 mysql:8.4.7 → 26）。
+	// 仅对非滚动 tag 探测，且受 ignored 抑制、按目标去重，避免刷屏。
+	if s.maybeNotifyNewerTag(ctx, img, existing) {
+		found = true
+	}
+
+	return found, nil
+}
+
+// maybeNotifyNewerTag 探测仓库是否出现比当前固定 tag 更高的新版本。
+// 是则生成一条 type=new-tag 的弱提醒（系统内，不发钉钉），并记录去重目标。
+// 返回是否产生了提醒。
+func (s *Scanner) maybeNotifyNewerTag(ctx context.Context, img *models.Image, existing *models.Image) bool {
+	if img == nil || img.ID == 0 {
+		return false
+	}
+	// 仅对固定语义版本 tag 探测；latest/lts 等滚动 tag 交给 digest 强更新。
+	if version.IsRollingTag(img.Tag) {
+		return false
+	}
+	// 忽略的镜像不打扰
+	if existing != nil && existing.Ignored {
+		return false
+	}
+
+	ref := registry.ImageRef{Registry: img.Registry, Repo: img.Name, Tag: img.Tag}
+	tags, err := s.reg.ListTags(ctx, ref)
+	if err != nil || len(tags) == 0 {
+		return false
+	}
+	newer := version.NewerAvailable(img.Tag, tags)
+	if newer == "" {
+		return false
+	}
+	// 去重：同一目标（或更低目标）已弱提醒过则不再重复
+	if existing != nil && existing.NotifiedNewTag == newer {
+		return false
+	}
+
+	msg := fmt.Sprintf("镜像 %s 出现更新的独立版本 %s（当前 %s）", img.Name, newer, img.Tag)
+	_ = s.store.CreateNotification(&models.Notification{
+		ImageID:    img.ID,
+		ImageName:  img.Name,
+		Reference:  img.Reference,
+		OldTag:     img.Tag,
+		NewTag:     newer,
+		Type:       models.NotifNewTag,
+		Message:    msg,
+	})
+	_ = s.store.SetNotifiedNewTag(img.ID, newer)
+	return true
 }
 
 // computeStatus 依据本地摘要、远端摘要与上次远端摘要，判定镜像状态。

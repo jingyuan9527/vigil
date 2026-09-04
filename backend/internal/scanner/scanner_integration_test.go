@@ -209,3 +209,163 @@ func TestIgnoredSuppressesNotification(t *testing.T) {
 		t.Errorf("notifications = %d, want 0 for ignored image", len(notifs))
 	}
 }
+
+// TestNewerTagWeakNotify 验证「固定 tag 发现更高独立版本 → 弱提醒」语义：
+//  1. mysql:8.4.7 首扫即发现仓库 tags 里有更高的 26 → 生成 type=new-tag 弱提醒；
+//  2. registry 不变时再次扫描 → 去重，不重复提醒；
+//  3. 仓库再出现更高的 30 → 生成新的弱提醒（指向 30）。
+// latest 等滚动 tag 不参与该探测（交给 digest 强更新）。
+func TestNewerTagWeakNotify(t *testing.T) {
+	digest := "c0ffee"
+	// 可变 tags：模拟仓库版本演进
+	allTags := []string{"8.0.36", "8.4.7", "8.4.8", "26", "latest"}
+
+	dockerMux := http.NewServeMux()
+	dockerMux.HandleFunc("/_ping", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	dockerMux.HandleFunc("/images/json", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"Id": "sha256:1", "RepoTags": []string{"mysql:8.4.7"}, "RepoDigests": []string{"mysql@sha256:" + digest}},
+		})
+	})
+	dockerSrv := httptest.NewServer(dockerMux)
+	defer dockerSrv.Close()
+
+	var registrySrvURL string
+	registryMux := http.NewServeMux()
+	registryMux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"token": "fake-token"})
+	})
+	registryMux.HandleFunc("/v2/library/mysql/manifests/8.4.7", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.Header().Set("WWW-Authenticate",
+				`Bearer realm="`+registrySrvURL+`/token",service="registry.docker.io",scope="repository:library/mysql:pull"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Docker-Content-Digest", "sha256:"+digest)
+		w.WriteHeader(http.StatusOK)
+	})
+	registryMux.HandleFunc("/v2/library/mysql/tags/list", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.Header().Set("WWW-Authenticate",
+				`Bearer realm="`+registrySrvURL+`/token",service="registry.docker.io",scope="repository:library/mysql:pull"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"name": "library/mysql", "tags": allTags})
+	})
+	registrySrv := httptest.NewServer(registryMux)
+	defer registrySrv.Close()
+	registrySrvURL = registrySrv.URL
+	regHost := strings.TrimPrefix(registrySrv.URL, "http://")
+
+	st, _ := store.Open(":memory:")
+	dcli := docker.NewClientForTest(dockerSrv.URL, dockerSrv.Client())
+	regHTTP := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	reg := registry.NewClientWithMirrorAndHTTP(true, regHost, regHTTP)
+	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.7"}, DisableDefault: false}
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, ""))
+
+	newTagNotifs := func() []models.Notification {
+		all, _ := st.ListNotifications(false)
+		var out []models.Notification
+		for _, n := range all {
+			if n.Type == models.NotifNewTag {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+
+	// 第 1 轮：local==remote → up-to-date 无强更新；但发现更高 26 → 弱提醒 1 条
+	sc.Run(context.Background())
+	n1 := newTagNotifs()
+	if len(n1) != 1 {
+		t.Fatalf("scan1 new-tag notifs = %d, want 1", len(n1))
+	}
+	if n1[0].NewTag != "26" {
+		t.Errorf("scan1 NewTag = %q, want 26", n1[0].NewTag)
+	}
+	img, _ := st.GetImageByRef("mysql:8.4.7")
+	if img == nil {
+		t.Fatal("mysql:8.4.7 not recorded")
+	}
+	if img.NotifiedNewTag != "26" {
+		t.Errorf("NotifiedNewTag = %q, want 26", img.NotifiedNewTag)
+	}
+	if img.Status != models.StatusUpToDate {
+		t.Errorf("status = %q, want up-to-date (no digest change)", img.Status)
+	}
+
+	// 第 2 轮：registry 未变 → 去重，不再新增弱提醒
+	sc.Run(context.Background())
+	if n2 := newTagNotifs(); len(n2) != 1 {
+		t.Errorf("scan2 new-tag notifs = %d, want 1 (dedup, no repeat)", len(n2))
+	}
+
+	// 第 3 轮：仓库出现更高的 30 → 产生指向 30 的新弱提醒
+	allTags = append(allTags, "30")
+	sc.Run(context.Background())
+	n3 := newTagNotifs()
+	if len(n3) != 2 {
+		t.Fatalf("scan3 new-tag notifs = %d, want 2", len(n3))
+	}
+	img3, _ := st.GetImageByRef("mysql:8.4.7")
+	if img3.NotifiedNewTag != "30" {
+		t.Errorf("NotifiedNewTag after 30 = %q, want 30", img3.NotifiedNewTag)
+	}
+}
+
+// TestRollingTagNoWeakNotify 验证 latest 等滚动 tag 不触发仓库级弱提醒
+// （滚动 tag 的更新由 digest 强更新承担，避免无谓的 tags/list 噪音）。
+func TestRollingTagNoWeakNotify(t *testing.T) {
+	digest := "beef00"
+	dockerMux := http.NewServeMux()
+	dockerMux.HandleFunc("/_ping", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	dockerMux.HandleFunc("/images/json", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"Id": "sha256:1", "RepoTags": []string{"mysql:latest"}, "RepoDigests": []string{"mysql@sha256:" + digest}},
+		})
+	})
+	dockerSrv := httptest.NewServer(dockerMux)
+	defer dockerSrv.Close()
+
+	var registrySrvURL string
+	registryMux := http.NewServeMux()
+	registryMux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"token": "fake-token"})
+	})
+	registryMux.HandleFunc("/v2/library/mysql/manifests/latest", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.Header().Set("WWW-Authenticate",
+				`Bearer realm="`+registrySrvURL+`/token",service="registry.docker.io",scope="repository:library/mysql:pull"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Docker-Content-Digest", "sha256:"+digest)
+		w.WriteHeader(http.StatusOK)
+	})
+	registryMux.HandleFunc("/v2/library/mysql/tags/list", func(w http.ResponseWriter, r *http.Request) {
+		// 故意暴露更高版本，但 latest 是滚动 tag，不应因此弱提醒
+		_ = json.NewEncoder(w).Encode(map[string]any{"name": "library/mysql", "tags": []string{"26", "latest"}})
+	})
+	registrySrv := httptest.NewServer(registryMux)
+	defer registrySrv.Close()
+	registrySrvURL = registrySrv.URL
+	regHost := strings.TrimPrefix(registrySrv.URL, "http://")
+
+	st, _ := store.Open(":memory:")
+	dcli := docker.NewClientForTest(dockerSrv.URL, dockerSrv.Client())
+	regHTTP := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	reg := registry.NewClientWithMirrorAndHTTP(true, regHost, regHTTP)
+	cfg := &config.Config{DefaultWatch: []string{"mysql:latest"}, DisableDefault: false}
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, ""))
+
+	sc.Run(context.Background())
+	all, _ := st.ListNotifications(false)
+	for _, n := range all {
+		if n.Type == models.NotifNewTag {
+			t.Errorf("rolling tag produced new-tag weak notify: %+v", n)
+		}
+	}
+}

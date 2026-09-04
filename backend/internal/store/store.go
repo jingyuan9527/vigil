@@ -48,6 +48,7 @@ func migrate(db *sql.DB) error {
 		last_update   TEXT,
 		error         TEXT,
 		ignored       INTEGER NOT NULL DEFAULT 0,
+		notified_new_tag TEXT,
 		created_at    TEXT NOT NULL
 	);
 	CREATE TABLE IF NOT EXISTS image_versions (
@@ -66,6 +67,7 @@ func migrate(db *sql.DB) error {
 		new_digest  TEXT,
 		old_tag     TEXT,
 		new_tag     TEXT,
+		type        TEXT NOT NULL DEFAULT 'update',
 		message     TEXT,
 		read        INTEGER NOT NULL DEFAULT 0,
 		created_at  TEXT NOT NULL
@@ -99,6 +101,8 @@ func migrate(db *sql.DB) error {
 	// 轻量幂等迁移：为旧版本库补充新增列（SQLite 无 ADD COLUMN IF NOT EXISTS，
 	// 通过忽略 duplicate column 错误实现幂等）。
 	_ = addColumnIfMissing(db, "images", "ignored", "INTEGER NOT NULL DEFAULT 0")
+	_ = addColumnIfMissing(db, "images", "notified_new_tag", "TEXT")
+	_ = addColumnIfMissing(db, "notifications", "type", "TEXT NOT NULL DEFAULT 'update'")
 	return nil
 }
 
@@ -137,14 +141,14 @@ func ns(v sql.NullString) string {
 // GetImageByRef 按引用查找镜像，未找到返回 (nil, nil)。
 func (s *Store) GetImageByRef(ref string) (*models.Image, error) {
 	row := s.db.QueryRow(
-		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,created_at
+		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,notified_new_tag,created_at
 		 FROM images WHERE reference=?`, ref)
 	return scanImage(row)
 }
 
 func (s *Store) GetImage(id int64) (*models.Image, error) {
 	row := s.db.QueryRow(
-		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,created_at
+		`SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,notified_new_tag,created_at
 		 FROM images WHERE id=?`, id)
 	return scanImage(row)
 }
@@ -156,9 +160,10 @@ func scanImage(row *sql.Row) (*models.Image, error) {
 		source, localDigest, remoteDigest, status       string
 		lastCheck, lastUpdate, errMsg, createdAt        sql.NullString
 		ignored                                         int
+		notifiedNewTag                                  sql.NullString
 	)
 	if err := row.Scan(&id, &name, &reference, &registry, &tag, &source, &localDigest,
-		&remoteDigest, &status, &lastCheck, &lastUpdate, &errMsg, &ignored, &createdAt); err != nil {
+		&remoteDigest, &status, &lastCheck, &lastUpdate, &errMsg, &ignored, &notifiedNewTag, &createdAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -167,12 +172,13 @@ func scanImage(row *sql.Row) (*models.Image, error) {
 	return &models.Image{
 		ID: id, Name: name, Reference: reference, Registry: registry, Tag: tag,
 		Source: source, LocalDigest: localDigest, RemoteDigest: remoteDigest,
-		Status:     models.ImageStatus(status),
-		Ignored:    ignored == 1,
-		LastCheck:  parseTime(ns(lastCheck)),
-		LastUpdate: parseTime(ns(lastUpdate)),
-		Error:      ns(errMsg),
-		CreatedAt:  parseTime(ns(createdAt)).UTC(),
+		Status:        models.ImageStatus(status),
+		Ignored:       ignored == 1,
+		NotifiedNewTag: ns(notifiedNewTag),
+		LastCheck:     parseTime(ns(lastCheck)),
+		LastUpdate:    parseTime(ns(lastUpdate)),
+		Error:         ns(errMsg),
+		CreatedAt:     parseTime(ns(createdAt)).UTC(),
 	}, nil
 }
 
@@ -209,6 +215,14 @@ func (s *Store) SetIgnored(id int64, ignored bool) error {
 		v = 1
 	}
 	_, err := s.db.Exec("UPDATE images SET ignored=? WHERE id=?", v, id)
+	return err
+}
+
+// SetNotifiedNewTag 记录某镜像已弱提醒过的「更高新版本」目标 tag，用于去重：
+// 只有发现比该记录更新的版本时才再次弱提醒。该列由扫描弱提醒成功时写入，
+// 不会被 UpsertImage 覆盖。
+func (s *Store) SetNotifiedNewTag(id int64, newTag string) error {
+	_, err := s.db.Exec("UPDATE images SET notified_new_tag=? WHERE id=?", newTag, id)
 	return err
 }
 
@@ -253,7 +267,7 @@ func (s *Store) MarkDockerImagesMissing(liveRefs map[string]bool) (int64, error)
 
 // ListImages 列出镜像，status 为空时返回全部。
 func (s *Store) ListImages(status string) ([]models.Image, error) {
-	q := `SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,created_at FROM images`
+	q := `SELECT id,name,reference,registry,tag,source,local_digest,remote_digest,status,last_check,last_update,error,ignored,notified_new_tag,created_at FROM images`
 	var rows *sql.Rows
 	var err error
 	if status != "" {
@@ -274,20 +288,22 @@ func (s *Store) ListImages(status string) ([]models.Image, error) {
 			source, localDigest, remoteDigest, st                  string
 			lastCheck, lastUpdate, errMsg, createdAt               sql.NullString
 			ignored                                                  int
+			notifiedNewTag                                          sql.NullString
 		)
 		if err := rows.Scan(&id, &name, &reference, &registry, &tag, &source, &localDigest,
-			&remoteDigest, &st, &lastCheck, &lastUpdate, &errMsg, &ignored, &createdAt); err != nil {
+			&remoteDigest, &st, &lastCheck, &lastUpdate, &errMsg, &ignored, &notifiedNewTag, &createdAt); err != nil {
 			return nil, err
 		}
 		out = append(out, models.Image{
 			ID: id, Name: name, Reference: reference, Registry: registry, Tag: tag,
 			Source: source, LocalDigest: localDigest, RemoteDigest: remoteDigest,
-			Status:       models.ImageStatus(st),
-			Ignored:      ignored == 1,
-			LastCheck:    parseTime(ns(lastCheck)),
-			LastUpdate:   parseTime(ns(lastUpdate)),
-			Error:        ns(errMsg),
-			CreatedAt:    parseTime(ns(createdAt)).UTC(),
+			Status:        models.ImageStatus(st),
+			Ignored:       ignored == 1,
+			NotifiedNewTag: ns(notifiedNewTag),
+			LastCheck:     parseTime(ns(lastCheck)),
+			LastUpdate:    parseTime(ns(lastUpdate)),
+			Error:         ns(errMsg),
+			CreatedAt:     parseTime(ns(createdAt)).UTC(),
 		})
 	}
 	return out, rows.Err()
@@ -333,16 +349,20 @@ func (s *Store) ListVersions(imageID int64) ([]models.ImageVersion, error) {
 // ---- Notifications ----
 
 func (s *Store) CreateNotification(n *models.Notification) error {
+	typ := n.Type
+	if typ == "" {
+		typ = models.NotifUpdate
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO notifications (image_id,image_name,reference,old_digest,new_digest,old_tag,new_tag,message,read,created_at)
-		 VALUES (?,?,?,?,?,?,?,?,0,?)`,
+		`INSERT INTO notifications (image_id,image_name,reference,old_digest,new_digest,old_tag,new_tag,type,message,read,created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,0,?)`,
 		n.ImageID, n.ImageName, n.Reference, n.OldDigest, n.NewDigest,
-		n.OldTag, n.NewTag, n.Message, nowStr())
+		n.OldTag, n.NewTag, string(typ), n.Message, nowStr())
 	return err
 }
 
 func (s *Store) ListNotifications(unreadOnly bool) ([]models.Notification, error) {
-	q := `SELECT id,image_id,image_name,reference,old_digest,new_digest,old_tag,new_tag,message,read,created_at
+	q := `SELECT id,image_id,image_name,reference,old_digest,new_digest,old_tag,new_tag,type,message,read,created_at
 	      FROM notifications`
 	if unreadOnly {
 		q += " WHERE read=0"
@@ -356,20 +376,21 @@ func (s *Store) ListNotifications(unreadOnly bool) ([]models.Notification, error
 	var out []models.Notification
 	for rows.Next() {
 		var (
-			id                                   int64
-			imageID                              int64
-			imageName, reference                 string
-			oldDigest, newDigest, oldTag, newTag, message string
-			read                                 int
-			createdAt                            string
+			id                                                     int64
+			imageID                                                int64
+			imageName, reference                                   string
+			oldDigest, newDigest, oldTag, newTag, typ, message     string
+			read                                                   int
+			createdAt                                              string
 		)
 		if err := rows.Scan(&id, &imageID, &imageName, &reference, &oldDigest, &newDigest,
-			&oldTag, &newTag, &message, &read, &createdAt); err != nil {
+			&oldTag, &newTag, &typ, &message, &read, &createdAt); err != nil {
 			return nil, err
 		}
 		out = append(out, models.Notification{
 			ID: id, ImageID: imageID, ImageName: imageName, Reference: reference,
 			OldDigest: oldDigest, NewDigest: newDigest, OldTag: oldTag, NewTag: newTag,
+			Type:    models.NotificationKind(typ),
 			Message: message, Read: read == 1, CreatedAt: parseTime(createdAt).UTC(),
 		})
 	}

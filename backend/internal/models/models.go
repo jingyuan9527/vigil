@@ -24,6 +24,7 @@ type Image struct {
 	RemoteDigest string     `json:"remote_digest"`
 	Status       ImageStatus `json:"status"`
 	Ignored      bool       `json:"ignored"`      // 用户手动忽略该镜像的更新提醒（仍扫描，但不产生通知）
+	NotifiedNewTag string   `json:"notified_new_tag,omitempty"` // 已弱提醒过的「更高新版本」目标 tag，用于去重
 	LastCheck    *time.Time `json:"last_check"`
 	LastUpdate   *time.Time `json:"last_update"` // 远端摘要最近一次变化时间
 	Error        string     `json:"error,omitempty"`
@@ -39,9 +40,20 @@ type ImageVersion struct {
 	ScannedAt time.Time `json:"scanned_at"`
 }
 
+// NotificationKind 区分通知的强弱类型。
+type NotificationKind string
+
+const (
+	// NotifUpdate 强更新：同一 tag 的远端 digest 发生变化（如 latest 移动）。
+	NotifUpdate NotificationKind = "update"
+	// NotifNewTag 弱提醒：仓库出现比当前固定 tag 更高的独立版本（如 8.4.7 → 26）。
+	NotifNewTag NotificationKind = "new-tag"
+)
+
 // Notification 是检测到新版本时产生的更新通知。
 type Notification struct {
 	ID        int64     `json:"id"`
+	Type      NotificationKind `json:"type"`
 	ImageID   int64     `json:"image_id"`
 	ImageName string    `json:"image_name"`
 	Reference string    `json:"reference"`
