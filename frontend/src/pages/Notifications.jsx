@@ -3,11 +3,15 @@ import { api, fmtTime, shortDigest } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import StatusBadge from '../components/StatusBadge'
 import Spinner from '../components/Spinner'
+import Pagination from '../components/Pagination'
+
+const PAGE_SIZE = 10
 
 export default function Notifications() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [unreadOnly, setUnreadOnly] = useState(false)
+  const [page, setPage] = useState(1)
 
   const load = async () => {
     setLoading(true)
@@ -24,6 +28,11 @@ export default function Notifications() {
     // eslint-disable-next-line
   }, [unreadOnly])
 
+  // 切换筛选回第 1 页
+  useEffect(() => {
+    setPage(1)
+  }, [unreadOnly])
+
   const markRead = async (id) => {
     await api.markRead(id)
     load()
@@ -34,9 +43,19 @@ export default function Notifications() {
   }
 
   const unread = items.filter((i) => !i.read).length
+  const total = items.length
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const pageItems = items.slice((Math.min(page, totalPages) - 1) * PAGE_SIZE, Math.min(page, totalPages) * PAGE_SIZE)
+
+  const goPage = (p) => {
+    setPage(p)
+    requestAnimationFrame(() => {
+      document.querySelector('.notif-list-top')?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    })
+  }
 
   return (
-    <div className="space-y-6">
+    <div className="notif-list-top space-y-6 overflow-hidden">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 md:text-3xl">更新通知</h1>
@@ -85,8 +104,9 @@ export default function Notifications() {
       ) : items.length === 0 ? (
         <BentoCard className="text-center text-sm text-zinc-400 dark:text-zinc-500">暂无通知</BentoCard>
       ) : (
-        <div className="space-y-3">
-          {items.map((n) => (
+        <>
+          <div className="space-y-3">
+            {pageItems.map((n) => (
             <BentoCard key={n.id} className={n.read ? 'opacity-60' : ''}>
               <div className="flex flex-wrap items-start justify-between gap-3 overflow-hidden">
                 <div className="min-w-0 flex-1">
@@ -119,7 +139,9 @@ export default function Notifications() {
               </div>
             </BentoCard>
           ))}
-        </div>
+          </div>
+          <Pagination page={page} total={total} pageSize={PAGE_SIZE} onChange={goPage} />
+        </>
       )}
     </div>
   )

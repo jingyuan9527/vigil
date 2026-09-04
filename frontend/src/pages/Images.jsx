@@ -4,6 +4,7 @@ import { api, fmtTime, shortDigest } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import StatusBadge from '../components/StatusBadge'
 import Spinner from '../components/Spinner'
+import Pagination from '../components/Pagination'
 
 const FILTERS = [
   { key: '', label: '全部' },
@@ -13,12 +14,15 @@ const FILTERS = [
   { key: 'unknown', label: '未知' },
 ]
 
+const PAGE_SIZE = 12
+
 export default function Images() {
   const navigate = useNavigate()
   const [images, setImages] = useState([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('')
   const [query, setQuery] = useState('')
+  const [page, setPage] = useState(1)
   const [newRef, setNewRef] = useState('')
   const [adding, setAdding] = useState(false)
   const [err, setErr] = useState('')
@@ -40,12 +44,34 @@ export default function Images() {
     // eslint-disable-next-line
   }, [filter])
 
+  // 筛选或搜索条件变化时回到第 1 页
+  useEffect(() => {
+    setPage(1)
+  }, [filter, query])
+
   const filtered = useMemo(() => {
     let out = images
     if (filter === 'ignored') out = out.filter((i) => i.ignored)
     if (query) out = out.filter((i) => i.reference.toLowerCase().includes(query.toLowerCase()))
     return out
   }, [images, query, filter])
+
+  // 分页切片（客户端分页，基于过滤后的全集）
+  const total = filtered.length
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const pageItems = useMemo(() => {
+    const start = (Math.min(page, totalPages) - 1) * PAGE_SIZE
+    return filtered.slice(start, start + PAGE_SIZE)
+  }, [filtered, page, totalPages])
+
+  const goPage = (p) => {
+    setPage(p)
+    // 切换分页后让列表回到可视区顶部
+    requestAnimationFrame(() => {
+      document.querySelector('.img-list-top')?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    })
+  }
+
 
   const onAdd = async (e) => {
     e.preventDefault()
@@ -76,7 +102,7 @@ export default function Images() {
   }
 
   return (
-    <div className="space-y-6 overflow-hidden">
+    <div className="img-list-top space-y-6 overflow-hidden">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 md:text-3xl">镜像列表</h1>
@@ -124,8 +150,9 @@ export default function Images() {
       ) : filtered.length === 0 ? (
         <BentoCard className="text-center text-sm text-zinc-400 dark:text-zinc-500">没有匹配的镜像</BentoCard>
       ) : (
-        <div className="bento-grid">
-          {filtered.map((img) => (
+        <>
+          <div className="bento-grid">
+            {pageItems.map((img) => (
             <BentoCard key={img.id} className={`group flex flex-col ${img.ignored ? 'ring-1 ring-zinc-300/70 dark:ring-zinc-600/60' : ''}`}>
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -191,7 +218,9 @@ export default function Images() {
               </div>
             </BentoCard>
           ))}
-        </div>
+          </div>
+          <Pagination page={page} total={total} pageSize={PAGE_SIZE} onChange={goPage} />
+        </>
       )}
     </div>
   )
