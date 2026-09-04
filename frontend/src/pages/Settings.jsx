@@ -65,7 +65,7 @@ export default function Settings() {
     setTesting(true)
     setTestMsg(null)
     try {
-      const res = await api.testDingTalk(form.dingtalk_webhook)
+      const res = await api.testDingTalk(form.dingtalk_webhook, form.dingtalk_secret)
       if (res.ok) {
         setTestMsg({ type: 'ok', text: '测试通知已发送，请检查钉钉群是否收到' })
       } else {
@@ -161,6 +161,17 @@ export default function Settings() {
               placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx"
               value={form.dingtalk_webhook}
               onChange={(e) => update({ dingtalk_webhook: e.target.value })}
+              className="mt-3 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+            />
+            <div className="mt-3 font-medium text-zinc-900 dark:text-zinc-100">加签密钥（可选）</div>
+            <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+              若机器人启用了「加签」安全设置，请填写密钥；留空表示不加签。
+            </div>
+            <input
+              type="password"
+              placeholder="钉钉机器人安全设置中的加签密钥"
+              value={form.dingtalk_secret}
+              onChange={(e) => update({ dingtalk_secret: e.target.value })}
               className="mt-3 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
             />
             <div className="mt-3">

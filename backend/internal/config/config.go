@@ -23,6 +23,7 @@ type Config struct {
 	AdminPassword    string
 	JWTSecret        string
 	DingTalkWebhook  string
+	DingTalkSecret   string
 }
 
 func getEnv(key, def string) string {
@@ -63,6 +64,7 @@ func Load() *Config {
 		AdminPassword:    getEnv("ADMIN_PASSWORD", ""),
 		JWTSecret:        getEnv("JWT_SECRET", ""),
 		DingTalkWebhook:  getEnv("DINGTALK_WEBHOOK", ""),
+		DingTalkSecret:   getEnv("DINGTALK_SECRET", ""),
 	}
 	if w := getEnv("WATCH", ""); w != "" {
 		for _, p := range strings.Split(w, ",") {

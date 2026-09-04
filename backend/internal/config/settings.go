@@ -14,6 +14,7 @@ type Settings struct {
 	RegistryMirror      string `json:"registry_mirror"`        // 注册表镜像主机（非空时覆盖请求主机）
 	DisableDefaultWatch bool   `json:"disable_default_watch"`  // 关闭内置演示监控列表
 	DingTalkWebhook     string `json:"dingtalk_webhook"`       // 钉钉通知 Webhook URL
+	DingTalkSecret      string `json:"dingtalk_secret"`        // 钉钉机器人加签密钥（为空表示不加签）
 }
 
 // ScanMinSeconds 是 scan_interval 在启用状态下允许的最小值，避免过于频繁地打注册表。
@@ -29,16 +30,18 @@ type LiveSettings struct {
 	RegistryMirror      string
 	DisableDefaultWatch bool
 	DingTalkWebhook     string
+	DingTalkSecret      string
 }
 
 // NewLiveSettings 以环境变量初值构造 LiveSettings。
-func NewLiveSettings(scanSeconds int, insecure bool, mirror string, disableDefault bool, dingTalkWebhook string) *LiveSettings {
+func NewLiveSettings(scanSeconds int, insecure bool, mirror string, disableDefault bool, dingTalkWebhook, dingTalkSecret string) *LiveSettings {
 	l := &LiveSettings{
 		ScanInterval:        scanSeconds,
 		RegistryInsecure:    insecure,
 		RegistryMirror:      mirror,
 		DisableDefaultWatch: disableDefault,
 		DingTalkWebhook:     dingTalkWebhook,
+		DingTalkSecret:      dingTalkSecret,
 	}
 	l.broadcast = make(chan struct{})
 	return l
@@ -54,6 +57,7 @@ func (l *LiveSettings) Snapshot() Settings {
 		RegistryMirror:      l.RegistryMirror,
 		DisableDefaultWatch: l.DisableDefaultWatch,
 		DingTalkWebhook:     l.DingTalkWebhook,
+		DingTalkSecret:      l.DingTalkSecret,
 	}
 }
 
@@ -66,6 +70,7 @@ func (l *LiveSettings) Apply(s Settings) {
 	l.RegistryMirror = s.RegistryMirror
 	l.DisableDefaultWatch = s.DisableDefaultWatch
 	l.DingTalkWebhook = s.DingTalkWebhook
+	l.DingTalkSecret = s.DingTalkSecret
 	old := l.broadcast
 	l.broadcast = make(chan struct{})
 	l.mu.Unlock()
@@ -97,6 +102,7 @@ func SettingsToMap(s Settings) map[string]string {
 		"registry_mirror":       s.RegistryMirror,
 		"disable_default_watch": strconv.FormatBool(s.DisableDefaultWatch),
 		"dingtalk_webhook":      s.DingTalkWebhook,
+		"dingtalk_secret":       s.DingTalkSecret,
 	}
 }
 
@@ -119,6 +125,9 @@ func SettingsFromMap(m map[string]string) Settings {
 	}
 	if v, ok := m["dingtalk_webhook"]; ok {
 		s.DingTalkWebhook = v
+	}
+	if v, ok := m["dingtalk_secret"]; ok {
+		s.DingTalkSecret = v
 	}
 	return s
 }

@@ -57,7 +57,7 @@ func main() {
 	}
 
 	// 运行时可变配置：以环境变量为初值，并以数据库中持久化的设置覆盖（页面可改）。
-	live := config.NewLiveSettings(int(cfg.ScanInterval.Seconds()), cfg.RegistryInsecure, cfg.RegistryMirror, cfg.DisableDefault, strings.TrimSpace(cfg.DingTalkWebhook))
+	live := config.NewLiveSettings(int(cfg.ScanInterval.Seconds()), cfg.RegistryInsecure, cfg.RegistryMirror, cfg.DisableDefault, strings.TrimSpace(cfg.DingTalkWebhook), strings.TrimSpace(cfg.DingTalkSecret))
 	if m, err := st.LoadSettingsMap(); err == nil && len(m) > 0 {
 		live.Apply(config.SettingsFromMap(m))
 	}

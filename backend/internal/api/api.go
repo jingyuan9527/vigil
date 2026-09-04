@@ -421,20 +421,24 @@ func (a *api) testDingTalk(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Webhook string `json:"webhook"`
+		Secret  string `json:"secret"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
 	webhook := strings.TrimSpace(body.Webhook)
+	secret := strings.TrimSpace(body.Secret)
 	if webhook == "" {
-		webhook = strings.TrimSpace(a.settings.Snapshot().DingTalkWebhook)
+		snap := a.settings.Snapshot()
+		webhook = strings.TrimSpace(snap.DingTalkWebhook)
+		secret = strings.TrimSpace(snap.DingTalkSecret)
 	}
 	if webhook == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "未配置钉钉 Webhook，请先在上方填写"})
 		return
 	}
-	err := notification.SendDingTalk(webhook,
+	err := notification.SendDingTalk(webhook, secret,
 		"DockMon 连通性测试",
 		"### ✅ 连通性测试成功\n\n这是一条来自 DockMon 的测试消息，说明钉钉通知配置正确。\n\n**时间**: "+time.Now().Format("2006-01-02 15:04:05"),
 	)

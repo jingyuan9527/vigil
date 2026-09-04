@@ -163,8 +163,9 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 
 			// 钉钉通知
 			if webhook := s.settings.Snapshot().DingTalkWebhook; webhook != "" {
+				secret := s.settings.Snapshot().DingTalkSecret
 				go func() {
-					if err := notification.NotifyUpdate(webhook, j.reference, prevRemote, remote); err != nil {
+					if err := notification.NotifyUpdate(webhook, secret, j.reference, prevRemote, remote); err != nil {
 						log.Printf("dingtalk notify failed for %s: %v", j.reference, err)
 					}
 				}()
@@ -226,8 +227,9 @@ func (s *Scanner) maybeNotifyNewerTag(ctx context.Context, img *models.Image, ex
 
 	// 钉钉同步发一条弱提醒（语义上为“可选新版本”，与强更新的强通知区分）
 	if webhook := s.settings.Snapshot().DingTalkWebhook; webhook != "" {
+		secret := s.settings.Snapshot().DingTalkSecret
 		go func() {
-			if err := notification.NotifyNewTag(webhook, img.Reference, img.Tag, newer); err != nil {
+			if err := notification.NotifyNewTag(webhook, secret, img.Reference, img.Tag, newer); err != nil {
 				log.Printf("dingtalk notify-newtag failed for %s: %v", img.Reference, err)
 			}
 		}()

@@ -83,7 +83,7 @@ func TestScannerFullPipeline(t *testing.T) {
 		DefaultWatch:   []string{"nginx:latest"},
 		DisableDefault: false,
 	}
-	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, ""))
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
 
 	// ---- 5) 第一次扫描：本地 == 远端，应为 up-to-date，不产生误报告知 ----
 	sc.Run(context.Background())
@@ -174,7 +174,7 @@ func TestIgnoredSuppressesNotification(t *testing.T) {
 	regHTTP := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}}
 	reg := registry.NewClientWithMirrorAndHTTP(true, regHost, regHTTP)
 	cfg := &config.Config{DefaultWatch: []string{"mysql:8"}, DisableDefault: false}
-	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, ""))
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
 
 	// 首扫：建立 up-to-date 基线，且无通知
 	sc.Run(context.Background())
@@ -264,7 +264,7 @@ func TestNewerTagWeakNotify(t *testing.T) {
 	regHTTP := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}}
 	reg := registry.NewClientWithMirrorAndHTTP(true, regHost, regHTTP)
 	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.7"}, DisableDefault: false}
-	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, ""))
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
 
 	newTagNotifs := func() []models.Notification {
 		all, _ := st.ListNotifications(false)
@@ -359,7 +359,7 @@ func TestRollingTagNoWeakNotify(t *testing.T) {
 	regHTTP := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}}
 	reg := registry.NewClientWithMirrorAndHTTP(true, regHost, regHTTP)
 	cfg := &config.Config{DefaultWatch: []string{"mysql:latest"}, DisableDefault: false}
-	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, ""))
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
 
 	sc.Run(context.Background())
 	all, _ := st.ListNotifications(false)
