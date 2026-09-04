@@ -18,6 +18,16 @@ const FILTERS = [
 // 列表排序权重：有更新的镜像排最前，方便优先比对
 const STATUS_ORDER = { 'update-available': 0, unknown: 1, 'up-to-date': 2, stale: 3 }
 
+// 紧凑状态点（列表行用，替代整枚徽章省宽度）
+const STATUS_DOT = {
+  'up-to-date': 'bg-emerald-500',
+  'update-available': 'bg-amber-500',
+  'new-tag': 'bg-blue-500',
+  unknown: 'bg-zinc-400',
+  stale: 'bg-rose-500',
+  ignored: 'bg-zinc-400',
+}
+
 export default function Compare() {
   const [params, setParams] = useSearchParams()
   const [images, setImages] = useState([])
@@ -126,7 +136,7 @@ export default function Compare() {
       )}
 
       <div className="grid gap-6 overflow-hidden lg:h-[calc(100vh-230px)] lg:grid-cols-[280px_1fr]">
-        {/* 桌面选择器（仅 lg）：搜索 + 状态过滤 + 有更新优先 */}
+        {/* 桌面选择器（仅 lg）：搜索 + 状态过滤 + 紧凑行列表（有更新优先） */}
         <div className="hidden min-w-0 flex-col gap-3 lg:flex lg:max-h-full">
           <div className="space-y-2.5">
             <input
@@ -135,23 +145,28 @@ export default function Compare() {
               placeholder="搜索镜像引用…"
               className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm outline-none transition-all focus:border-bento-accent focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
             />
-            <div className="flex gap-1.5">
-              {FILTERS.map((f) => (
-                <button
-                  key={f.key}
-                  onClick={() => setFilter(f.key)}
-                  className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
-                    filter === f.key
-                      ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
-                      : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex gap-1.5">
+                {FILTERS.map((f) => (
+                  <button
+                    key={f.key}
+                    onClick={() => setFilter(f.key)}
+                    className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                      filter === f.key
+                        ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
+                        : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+              <span className="shrink-0 text-[11px] tabular-nums text-zinc-400 dark:text-zinc-500">
+                {filteredImages.length}/{images.length}
+              </span>
             </div>
           </div>
-          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+          <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1">
             {loading ? (
               <Spinner />
             ) : images.length === 0 ? (
@@ -159,20 +174,26 @@ export default function Compare() {
             ) : filteredImages.length === 0 ? (
               <BentoCard className="text-center text-sm text-zinc-400 dark:text-zinc-500">没有匹配的镜像</BentoCard>
             ) : (
-              filteredImages.map((i) => (
-                <button
-                  key={i.id}
-                  onClick={() => pick(i)}
-                  className={`bento-card flex w-full items-center justify-between gap-3 p-3 text-left transition-all ${
-                    String(i.id) === id
-                      ? 'border-blue-500 bg-blue-50/50 ring-1 ring-blue-500/20 dark:bg-blue-900/10'
-                      : 'hover:border-zinc-200 dark:hover:border-zinc-700'
-                  }`}
-                >
-                  <span className="truncate text-sm font-medium text-zinc-800 dark:text-zinc-100" title={i.reference}>{i.reference}</span>
-                  <StatusBadge status={i.status} />
-                </button>
-              ))
+              filteredImages.map((i) => {
+                const active = String(i.id) === id
+                return (
+                  <button
+                    key={i.id}
+                    onClick={() => pick(i)}
+                    className={`flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors ${
+                      active
+                        ? 'bg-blue-50/70 ring-1 ring-blue-500/30 dark:bg-blue-900/25'
+                        : 'hover:bg-zinc-100 dark:hover:bg-zinc-800/70'
+                    }`}
+                  >
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[i.status] || STATUS_DOT.unknown}`} />
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-700 dark:text-zinc-200" title={i.reference}>
+                      {i.reference}
+                    </span>
+                    <StatusBadge status={i.status} />
+                  </button>
+                )
+              })
             )}
           </div>
         </div>

@@ -35,7 +35,7 @@ const MAP = {
 export default function StatusBadge({ status }) {
   const m = MAP[status] || MAP.unknown
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1 text-xs font-medium ${m.cls}`}>
+    <span className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl px-2.5 py-1 text-xs font-medium ${m.cls}`}>
       <span className={`h-1.5 w-1.5 rounded-full ${m.dot}`} />
       {m.label}
     </span>

@@ -101,3 +101,15 @@ export function fmtTime(t) {
   if (isNaN(d)) return '—'
   return d.toLocaleString('zh-CN', { hour12: false })
 }
+
+// 紧凑时间：今天只显示 HH:mm，更早的显示 M/D（用于高密度列表行）
+export function fmtShort(t) {
+  if (!t) return '—'
+  const d = new Date(t)
+  if (isNaN(d)) return '—'
+  const now = new Date()
+  if (d.toDateString() === now.toDateString()) {
+    return d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })
+  }
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}

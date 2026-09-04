@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { api, fmtTime, shortDigest } from '../api/client'
+import { api, fmtShort, shortDigest } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import Spinner from '../components/Spinner'
 import Pagination from '../components/Pagination'
@@ -158,46 +158,23 @@ export default function Notifications() {
         </div>
       </div>
 
-      {/* 概览：两组分级计数 */}
-      <div className="bento-grid">
-        {grouped.map((g) => (
-          <BentoCard key={g.key} className="flex items-center gap-4">
-            <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${g.iconCls}`}>{g.icon}</span>
-            <div className="min-w-0">
-              <div className="text-sm text-zinc-500 dark:text-zinc-400">{g.title}</div>
-              <div className="mt-0.5 text-2xl font-bold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100">{g.list.length}</div>
-            </div>
-          </BentoCard>
+      {/* 概览：单行紧凑统计条（密度优先） */}
+      <BentoCard className="flex flex-wrap items-center gap-x-8 gap-y-3">
+        {[
+          { label: '有新版本', v: grouped[0].list.length, dot: 'bg-amber-500', num: 'text-amber-600 dark:text-amber-400' },
+          { label: '可选更新', v: grouped[1].list.length, dot: 'bg-blue-500', num: 'text-blue-600 dark:text-blue-400' },
+          { label: '未读', v: unread, dot: 'bg-zinc-400 dark:bg-zinc-500', num: 'text-zinc-900 dark:text-zinc-100' },
+        ].map((s) => (
+          <div key={s.label} className="flex items-center gap-2.5">
+            <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${s.dot}`} />
+            <span className="text-sm text-zinc-500 dark:text-zinc-400">{s.label}</span>
+            <span className={`text-xl font-bold tabular-nums ${s.num}`}>{s.v}</span>
+          </div>
         ))}
-        <BentoCard className="flex items-center gap-4">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-            </svg>
-          </span>
-          <div className="min-w-0">
-            <div className="text-sm text-zinc-500 dark:text-zinc-400">未读提醒</div>
-            <div className="mt-0.5 text-2xl font-bold tracking-tight text-amber-500 tabular-nums">{unread}</div>
-          </div>
-        </BentoCard>
-        <button
-          onClick={rescanAll}
-          disabled={scanning}
-          className="group flex items-center gap-4 rounded-2xl border border-zinc-100 bg-white p-4 text-left shadow-sm transition-all duration-200 ease-out hover:-translate-y-1 hover:scale-[1.01] hover:shadow-lg disabled:opacity-60 dark:border-zinc-800 dark:bg-zinc-900 md:p-6"
-        >
-          <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-zinc-900 text-white dark:bg-white dark:text-zinc-900`}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={scanning ? 'animate-spin' : 'transition-transform group-hover:rotate-180'}>
-              <path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3v6h-6" />
-            </svg>
-          </span>
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{scanning ? '正在扫描全部镜像…' : '全部重新扫描'}</div>
-            <div className="mt-0.5 text-xs text-zinc-400 dark:text-zinc-500">一键对所有监控镜像重新检测更新</div>
-          </div>
-        </button>
-      </div>
+        <span className="ml-auto text-xs text-zinc-400 dark:text-zinc-500">共 {items.length} 条 · 点击组头可折叠</span>
+      </BentoCard>
 
-      {/* 分组列表：高优先级在前，各组独立折叠 + 分页 */}
+      {/* 分组列表：宽屏左右两列（高优先级在左），各组独立折叠 + 分页 */}
       {loading ? (
         <Spinner label="加载通知…" />
       ) : !hasAny ? (
@@ -215,17 +192,19 @@ export default function Notifications() {
           </p>
         </BentoCard>
       ) : (
-        grouped.map((g) => (
-          <NotifGroup
-            key={g.key}
-            group={g}
-            page={pages[g.key]}
-            collapsed={collapsed[g.key]}
-            onToggle={() => setCollapsed((prev) => ({ ...prev, [g.key]: !prev[g.key] }))}
-            onPage={goPage(g.key)}
-            onMarkRead={markRead}
-          />
-        ))
+        <div className="grid items-start gap-6 lg:grid-cols-2">
+          {grouped.map((g) => (
+            <NotifGroup
+              key={g.key}
+              group={g}
+              page={pages[g.key]}
+              collapsed={collapsed[g.key]}
+              onToggle={() => setCollapsed((prev) => ({ ...prev, [g.key]: !prev[g.key] }))}
+              onPage={goPage(g.key)}
+              onMarkRead={markRead}
+            />
+          ))}
+        </div>
       )}
     </div>
   )
@@ -264,49 +243,50 @@ function NotifGroup({ group, page, collapsed, onToggle, onPage, onMarkRead }) {
 
       {!collapsed && (
         total === 0 ? (
-          <div className="border-t border-zinc-100 px-4 py-6 text-center text-sm text-zinc-400 md:px-6 dark:border-zinc-800 dark:text-zinc-500">
-            本组暂无{unreadOnlyLabel(group)}通知
+          <div className="border-t border-zinc-100 px-4 py-6 text-center text-sm text-zinc-400 md:px-5 dark:border-zinc-800 dark:text-zinc-500">
+            本组暂无通知
           </div>
         ) : (
           <>
             <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {pageItems.map((n) => (
-                <li key={n.id} className={`flex items-start gap-3 px-4 py-3.5 transition-colors hover:bg-zinc-50 md:px-6 dark:hover:bg-zinc-800/50 ${n.read ? 'opacity-60' : ''}`}>
-                  <span className={`mt-2 h-2 w-2 shrink-0 rounded-full ${n.read ? 'bg-zinc-300 dark:bg-zinc-600' : group.rowAccent}`} />
+                <li key={n.id} className={`flex items-start gap-3 px-4 py-3 transition-colors hover:bg-zinc-50 md:px-5 dark:hover:bg-zinc-800/50 ${n.read ? 'opacity-60' : ''}`}>
+                  <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.read ? 'bg-zinc-300 dark:bg-zinc-600' : group.rowAccent}`} />
                   <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <div className="flex items-center justify-between gap-2">
                       <span className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100" title={n.reference}>{n.reference}</span>
-                      <span className={`shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium ${group.countCls}`}>{group.title}</span>
-                      {!n.read && <span className="text-[11px] font-medium text-amber-500">未读</span>}
+                      <span className="shrink-0 text-[11px] tabular-nums text-zinc-400">{fmtShort(n.created_at)}</span>
                     </div>
-                    {n.type === 'new-tag' ? (
-                      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-                        <span className="font-mono text-zinc-500 dark:text-zinc-400">{n.old_tag || '—'}</span>
-                        <span className="text-zinc-300 dark:text-zinc-600">→</span>
-                        <span className="font-mono font-medium text-blue-600 dark:text-blue-300">{n.new_tag}</span>
-                      </div>
-                    ) : (
-                      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-xs text-zinc-500 dark:text-zinc-400">
-                        <span title={n.old_digest}>{shortDigest(n.old_digest)}</span>
-                        <span className="text-zinc-300 dark:text-zinc-600">→</span>
-                        <span title={n.new_digest}>{shortDigest(n.new_digest)}</span>
-                      </div>
-                    )}
-                    <div className="mt-1 text-xs text-zinc-400">{fmtTime(n.created_at)}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-xs text-zinc-500 dark:text-zinc-400">
+                      {n.type === 'new-tag' ? (
+                        <>
+                          <span>{n.old_tag || '—'}</span>
+                          <span className="text-zinc-300 dark:text-zinc-600">→</span>
+                          <span className="font-medium text-blue-600 dark:text-blue-300">{n.new_tag}</span>
+                        </>
+                      ) : (
+                        <>
+                          <span title={n.old_digest}>{shortDigest(n.old_digest)}</span>
+                          <span className="text-zinc-300 dark:text-zinc-600">→</span>
+                          <span title={n.new_digest}>{shortDigest(n.new_digest)}</span>
+                        </>
+                      )}
+                    </div>
                   </div>
                   {!n.read && (
                     <button
                       onClick={() => onMarkRead(n.id)}
-                      className="shrink-0 rounded-xl border border-zinc-200 px-2.5 py-1 text-xs text-zinc-600 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      title="标记为已读"
+                      className="shrink-0 rounded-lg border border-zinc-200 px-2 py-0.5 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                     >
-                      标记已读
+                      已读
                     </button>
                   )}
                 </li>
               ))}
             </ul>
             {/* 组内独立分页 */}
-            <div className="border-t border-zinc-100 px-4 py-3 dark:border-zinc-800">
+            <div className="border-t border-zinc-100 px-4 py-2.5 dark:border-zinc-800">
               <Pagination page={cur} total={total} pageSize={PAGE_SIZE} onChange={onPage} />
             </div>
           </>
@@ -314,8 +294,4 @@ function NotifGroup({ group, page, collapsed, onToggle, onPage, onMarkRead }) {
       )}
     </section>
   )
-}
-
-function unreadOnlyLabel(group) {
-  return group.key === 'update' ? '「有新版本」类' : '「可选更新」类'
 }

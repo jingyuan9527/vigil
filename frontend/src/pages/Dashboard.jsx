@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, fmtTime, shortDigest } from '../api/client'
+import { api, fmtTime, fmtShort, shortDigest } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import StatCard from '../components/StatCard'
 import StatusBadge from '../components/StatusBadge'
@@ -125,22 +125,22 @@ export default function Dashboard() {
           </div>
         </BentoCard>
 
-        {/* 最近更新动态 */}
+        {/* 最近更新动态：限高内滚，避免 tall 卡撑破网格节奏 */}
         <BentoCard span="tall">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">最近更新动态</h3>
             <button onClick={() => navigate('/notifications')} className="text-xs font-medium text-bento-accent hover:underline">查看全部</button>
           </div>
-          <div className="space-y-2.5">
+          <div className="max-h-[22rem] space-y-1 overflow-y-auto pr-1">
             {updates.length === 0 && notifs.length === 0 && (
               <p className="py-8 text-center text-sm text-zinc-400 dark:text-zinc-500">暂无更新动态</p>
             )}
             {updates.slice(0, 5).map((i) => (
-              <div key={i.id} className="rounded-xl p-3 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+              <div key={i.id} className="rounded-xl px-2.5 py-2 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium text-zinc-800 dark:text-zinc-100">{i.reference}</div>
-                    <div className="mt-1 font-mono text-[11px] text-zinc-400">
+                    <div className="mt-0.5 truncate font-mono text-[11px] text-zinc-400">
                       {shortDigest(i.local_digest)} → {shortDigest(i.remote_digest)}
                     </div>
                   </div>
@@ -149,9 +149,14 @@ export default function Dashboard() {
               </div>
             ))}
             {notifs.slice(0, 3).map((n) => (
-              <div key={n.id} className="rounded-xl p-3 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
-                <div className="truncate text-sm font-medium text-zinc-800 dark:text-zinc-100">{n.reference}</div>
-                <div className="mt-1 text-xs text-zinc-400">{fmtTime(n.created_at)}</div>
+              <div key={n.id} className="rounded-xl px-2.5 py-2 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-zinc-800 dark:text-zinc-100">{n.reference}</div>
+                    <div className="mt-0.5 text-[11px] text-zinc-400">{n.type === 'new-tag' ? `可选更新 → ${n.new_tag}` : '有新版本'}</div>
+                  </div>
+                  <span className="shrink-0 text-[11px] text-zinc-400">{fmtShort(n.created_at)}</span>
+                </div>
               </div>
             ))}
           </div>
