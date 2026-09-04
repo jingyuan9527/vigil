@@ -277,7 +277,7 @@ func TestForceScanBackfillsAndDedups(t *testing.T) {
 		t.Fatalf("unread after routine scan = %d, want 0 (pin-watch baseline, no transition notify)", u)
 	}
 
-	// 强制扫描：补发 update 通知（按 digest 去重）
+	// 强制扫描：重新广播语义，存在版本差异即再次通知（无视去重与已读）
 	sc.Run(context.Background(), true)
 	if u, _ := st.UnreadCount(); u != 1 {
 		t.Fatalf("unread after force scan = %d, want 1", u)

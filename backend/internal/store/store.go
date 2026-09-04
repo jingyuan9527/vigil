@@ -173,12 +173,12 @@ func (s *Store) GetImage(id int64) (*models.Image, error) {
 
 func scanImage(row *sql.Row) (*models.Image, error) {
 	var (
-		id                     int64
-		name, reference, registry, tag                 string
-		source, localDigest, remoteDigest, status       string
-		lastCheck, lastUpdate, errMsg, createdAt        sql.NullString
-		ignored                                         int
-		mode                                            sql.NullString
+		id                                        int64
+		name, reference, registry, tag            string
+		source, localDigest, remoteDigest, status string
+		lastCheck, lastUpdate, errMsg, createdAt  sql.NullString
+		ignored                                   int
+		mode                                      sql.NullString
 	)
 	if err := row.Scan(&id, &name, &reference, &registry, &tag, &source, &localDigest,
 		&remoteDigest, &status, &lastCheck, &lastUpdate, &errMsg, &ignored, &mode, &createdAt); err != nil {
@@ -194,14 +194,14 @@ func scanImage(row *sql.Row) (*models.Image, error) {
 	return &models.Image{
 		ID: id, Name: name, Reference: reference, Registry: registry, Tag: tag,
 		Source: source, LocalDigest: localDigest, RemoteDigest: remoteDigest,
-		Status:         models.ImageStatus(status),
-		Ignored:        ignored == 1,
-		Mode:           m,
-		EffectiveMode:  models.ResolveMode(m, tag),
-		LastCheck:      parseTime(ns(lastCheck)),
-		LastUpdate:     parseTime(ns(lastUpdate)),
-		Error:          ns(errMsg),
-		CreatedAt:      parseTime(ns(createdAt)).UTC(),
+		Status:        models.ImageStatus(status),
+		Ignored:       ignored == 1,
+		Mode:          m,
+		EffectiveMode: models.ResolveMode(m, tag),
+		LastCheck:     parseTime(ns(lastCheck)),
+		LastUpdate:    parseTime(ns(lastUpdate)),
+		Error:         ns(errMsg),
+		CreatedAt:     parseTime(ns(createdAt)).UTC(),
 	}, nil
 }
 
@@ -435,12 +435,12 @@ func (s *Store) ListImages(status string) ([]models.Image, error) {
 	var out []models.Image
 	for rows.Next() {
 		var (
-			id                                                     int64
-			name, reference, registry, tag                          string
-			source, localDigest, remoteDigest, st                  string
-			lastCheck, lastUpdate, errMsg, createdAt               sql.NullString
-			ignored                                                  int
-			mode                                                    sql.NullString
+			id                                       int64
+			name, reference, registry, tag           string
+			source, localDigest, remoteDigest, st    string
+			lastCheck, lastUpdate, errMsg, createdAt sql.NullString
+			ignored                                  int
+			mode                                     sql.NullString
 		)
 		if err := rows.Scan(&id, &name, &reference, &registry, &tag, &source, &localDigest,
 			&remoteDigest, &st, &lastCheck, &lastUpdate, &errMsg, &ignored, &mode, &createdAt); err != nil {
@@ -453,14 +453,14 @@ func (s *Store) ListImages(status string) ([]models.Image, error) {
 		out = append(out, models.Image{
 			ID: id, Name: name, Reference: reference, Registry: registry, Tag: tag,
 			Source: source, LocalDigest: localDigest, RemoteDigest: remoteDigest,
-			Status:         models.ImageStatus(st),
-			Ignored:        ignored == 1,
-				Mode:           m,
-			EffectiveMode:  models.ResolveMode(m, tag),
-			LastCheck:      parseTime(ns(lastCheck)),
-			LastUpdate:     parseTime(ns(lastUpdate)),
-			Error:          ns(errMsg),
-			CreatedAt:      parseTime(ns(createdAt)).UTC(),
+			Status:        models.ImageStatus(st),
+			Ignored:       ignored == 1,
+			Mode:          m,
+			EffectiveMode: models.ResolveMode(m, tag),
+			LastCheck:     parseTime(ns(lastCheck)),
+			LastUpdate:    parseTime(ns(lastUpdate)),
+			Error:         ns(errMsg),
+			CreatedAt:     parseTime(ns(createdAt)).UTC(),
 		})
 	}
 	return out, rows.Err()
@@ -473,6 +473,25 @@ func (s *Store) AddVersion(imageID int64, digest, tag string) error {
 		`INSERT INTO image_versions (image_id,digest,tag,scanned_at) VALUES (?,?,?,?)`,
 		imageID, digest, tag, nowStr())
 	return err
+}
+
+// FirstVersionDigest 返回版本时间线中最早记录的非空摘要（该镜像首次记录到的远端版本），
+// 时间线为空时返回 ("", nil)。纯远端监控镜像的 remote_digest 随扫描滚动覆盖，
+// 强制扫描取此基线重建「首次记录 → 当前」的版本转移；是否与当前摘要存在差异由调用方判定
+// （取「最早记录」而非「最早与当前不同」，避免远端回到首次记录时误报转移）。
+func (s *Store) FirstVersionDigest(imageID int64) (string, error) {
+	var d sql.NullString
+	err := s.db.QueryRow(
+		`SELECT digest FROM image_versions
+		 WHERE image_id=? AND digest IS NOT NULL AND digest != ''
+		 ORDER BY scanned_at ASC, id ASC LIMIT 1`, imageID).Scan(&d)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return ns(d), nil
 }
 
 func (s *Store) ListVersions(imageID int64) ([]models.ImageVersion, error) {
@@ -535,12 +554,12 @@ func (s *Store) ListNotifications(unreadOnly bool, cursorID int64) ([]models.Not
 	var out []models.Notification
 	for rows.Next() {
 		var (
-			id                                                     int64
-			imageID                                                int64
-			imageName, reference                                   string
-			oldDigest, newDigest, oldTag, newTag, typ, message     string
-			read                                                   int
-			createdAt                                              string
+			id                                                 int64
+			imageID                                            int64
+			imageName, reference                               string
+			oldDigest, newDigest, oldTag, newTag, typ, message string
+			read                                               int
+			createdAt                                          string
 		)
 		if err := rows.Scan(&id, &imageID, &imageName, &reference, &oldDigest, &newDigest,
 			&oldTag, &newTag, &typ, &message, &read, &createdAt); err != nil {
@@ -606,10 +625,10 @@ func (s *Store) ListScans(limit int) ([]models.Scan, error) {
 	var out []models.Scan
 	for rows.Next() {
 		var (
-			id                                int64
-			startedAt                        string
-			finishedAt, status, errMsg       sql.NullString
-			checked, updates                 int
+			id                         int64
+			startedAt                  string
+			finishedAt, status, errMsg sql.NullString
+			checked, updates           int
 		)
 		if err := rows.Scan(&id, &startedAt, &finishedAt, &checked, &updates, &status, &errMsg); err != nil {
 			return nil, err
@@ -634,10 +653,10 @@ func (s *Store) LastScan() (*models.Scan, error) {
 		return nil, nil
 	}
 	var (
-		id                                int64
-		startedAt                        string
-		finishedAt, status, errMsg       sql.NullString
-		checked, updates                 int
+		id                         int64
+		startedAt                  string
+		finishedAt, status, errMsg sql.NullString
+		checked, updates           int
 	)
 	if err := rows.Scan(&id, &startedAt, &finishedAt, &checked, &updates, &status, &errMsg); err != nil {
 		return nil, err

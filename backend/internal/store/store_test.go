@@ -284,3 +284,56 @@ func TestSeenTagsAndMode(t *testing.T) {
 		t.Errorf("seen after delete = %d, want 0 (cleaned up)", len(seen3))
 	}
 }
+
+// TestFirstVersionDigest 验证版本时间线最早记录查询：返回首次记录的非空摘要；
+// 时间线为空时返回空串（不视为错误）。与当前摘要的差异判断由调用方完成。
+func TestFirstVersionDigest(t *testing.T) {
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	img := &models.Image{
+		Name: "library/nginx", Reference: "nginx:latest",
+		Source: "manual", Status: models.StatusUnknown, CreatedAt: time.Now(),
+	}
+	if err := s.UpsertImage(img); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, _ := s.GetImageByRef("nginx:latest")
+
+	// 空时间线
+	if d, err := s.FirstVersionDigest(got.ID); err != nil || d != "" {
+		t.Fatalf("empty timeline = (%q, %v), want (\"\", nil)", d, err)
+	}
+
+	// 时间线 R1 → R2 → R1（时间顺序写入），最早记录应为 R1（首次记录，而非「最早与 R2 不同」）
+	_ = s.AddVersion(got.ID, "sha256:r1", "latest")
+	_ = s.AddVersion(got.ID, "sha256:r2", "latest")
+	_ = s.AddVersion(got.ID, "sha256:r1", "latest")
+	if d, err := s.FirstVersionDigest(got.ID); err != nil || d != "sha256:r1" {
+		t.Fatalf("first version = (%q, %v), want sha256:r1", d, err)
+	}
+
+	// 时间线仅单一摘要：返回该摘要本身，差异判断交给调用方（无转移时调用方不广播）
+	img2 := &models.Image{
+		Name: "library/redis", Reference: "redis:latest",
+		Source: "manual", Status: models.StatusUnknown, CreatedAt: time.Now(),
+	}
+	if err := s.UpsertImage(img2); err != nil {
+		t.Fatalf("upsert2: %v", err)
+	}
+	got2, _ := s.GetImageByRef("redis:latest")
+	_ = s.AddVersion(got2.ID, "sha256:same", "latest")
+	_ = s.AddVersion(got2.ID, "sha256:same", "latest")
+	if d, _ := s.FirstVersionDigest(got2.ID); d != "sha256:same" {
+		t.Fatalf("single-digest timeline = %q, want sha256:same (caller compares)", d)
+	}
+
+	// 空摘要行应被忽略：追加空行后最早记录仍为 R1
+	if err := s.AddVersion(got.ID, "", "latest"); err != nil {
+		t.Fatalf("add empty version: %v", err)
+	}
+	if d, _ := s.FirstVersionDigest(got.ID); d != "sha256:r1" {
+		t.Fatalf("with empty digest row = %q, want sha256:r1", d)
+	}
+}

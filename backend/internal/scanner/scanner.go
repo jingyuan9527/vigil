@@ -87,8 +87,9 @@ func (s *Scanner) collectJobs(ctx context.Context) []job {
 
 // process 处理单个镜像：拉取远端摘要、比较、落库，按生效检测模式生成通知。
 //
-// force=true 时为「强制扫描」：对当前存在版本差异的镜像补发 update 通知
-// （含 Pin-Watch 锁定 tag 被覆盖的情况），统一按 (image, digest) 去重。
+// force=true 时为「强制扫描」：无视去重与已读，对所有存在版本差异的镜像
+// 重新广播 update 通知（含 Pin-Watch 锁定 tag 被覆盖的情况）；纯远端监控镜像
+// 的差异基线从版本时间线重建（prevRemote 已随扫描滚动覆盖，不可用）。
 func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) {
 	ref := registry.ParseRef(j.reference)
 	existing, _ := s.store.GetImageByRef(j.reference)
@@ -159,9 +160,24 @@ func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) 
 
 	found := false
 	if rerr == nil && remote != "" {
-		// 是否存在「版本差异」：有本地摘要时比对本地与远端；纯远端监控时比对上次已知远端。
-		diff := (j.localDigest != "" && j.localDigest != remote) ||
-			(j.localDigest == "" && prevRemote != "" && prevRemote != remote)
+		// 差异基线（old 即「用户当前持有的」摘要）：
+		//   - 有本地镜像：本地摘要就是持有版本，差异=本地≠远端（持久，直到拉取）；
+		//   - 纯远端监控常规扫描：上轮远端 prevRemote，但它随扫描滚动覆盖，差异仅转移当轮可见；
+		//   - 纯远端监控强制扫描：改取版本时间线最早记录的摘要作基线，仅当与当前远端不同
+		//     才按「从未通知过」重建差异并重新广播（prevRemote 滚动后不可复用、也不代表持有版本）。
+		baseline := j.localDigest
+		if baseline == "" && prevRemote != "" {
+			baseline = prevRemote
+		}
+		if force && j.localDigest == "" {
+			first, ferr := s.store.FirstVersionDigest(img.ID)
+			if ferr != nil {
+				log.Printf("force rescan baseline lookup failed for %s: %v", j.reference, ferr)
+			} else if first != "" && first != remote {
+				baseline = first
+			}
+		}
+		diff := baseline != "" && baseline != remote
 
 		// 同一个 digest 常规扫描只通知一次（防刷屏）
 		notified, _ := s.store.HasDigestNotification(img.ID, remote)
@@ -177,13 +193,9 @@ func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) 
 		}
 		// 去重闸门：常规扫描下同一 digest 只通知一次（防刷屏）。
 		// 强制扫描（「全部重新扫描」）语义为重新广播：无论历史是否通知过、
-		// 用户是否已读，只要当前存在版本差异就再次通知（系统 + 钉钉）。
+		// 用户是否已读，只要存在版本差异就再次通知（系统 + 钉钉）。
 		if shouldNotify && (!notified || force) {
-			// old 取「用户当前持有的」摘要：本地摘要优先，纯远端监控回退到上次远端
-			old := j.localDigest
-			if old == "" {
-				old = prevRemote
-			}
+			old := baseline
 			msg := fmt.Sprintf("镜像 %s 检测到新版本（远端摘要已变更）", j.reference)
 			_ = s.store.CreateNotification(&models.Notification{
 				ImageID:   img.ID,
@@ -323,8 +335,9 @@ func computeStatus(local, remote, prevRemote string) (models.ImageStatus, bool) 
 // IsRunning 报告是否已有扫描正在执行（供 API 层提前返回友好提示）。
 func (s *Scanner) IsRunning() bool { return s.running.Load() }
 
-// Run 执行一次完整扫描。force=true 时为「强制扫描」：对当前所有存在版本差异的
-// 镜像补发 update 通知（按 digest 去重），覆盖 Pin-Watch 锁定 tag 被覆盖等常规不告警的情况。
+// Run 执行一次完整扫描。force=true 时为「强制扫描」（通知页「全部重新扫描」）：
+// 无视去重与已读，对所有存在版本差异的镜像重新广播 update 通知（含 Pin-Watch 锁定
+// tag 被覆盖、以及纯远端监控按版本时间线重建基线的镜像），每次触发都会再次通知。
 //
 // 返回是否真正启动：定时器、手动扫描、添加镜像可能并发触发，CAS 保证单飞，
 // 重复触发直接跳过（返回 false）。
