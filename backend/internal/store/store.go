@@ -387,6 +387,39 @@ func (s *Store) ClearReadNotifications() (int64, error) {
 	return res.RowsAffected()
 }
 
+// AutoReadAchievedNotifications 将「目标已达成」的未读通知自动转已读：
+//   - new-tag：本地已存在同名且同 tag 的非缺失镜像（通知推荐的版本用户已用上）；
+//   - update：该引用的本地摘要已等于通知记录的新摘要（内容已同步到位）。
+//
+// 通知行仅转已读、不删除，事件历史仍可在列表查看，未读角标不再被过期提醒占用。
+// 纯远端监控（无本地摘要）与已删除（stale）的镜像不会命中，保持人工处理。
+func (s *Store) AutoReadAchievedNotifications() (int64, error) {
+	r1, err := s.db.Exec(`
+		UPDATE notifications SET read=1
+		WHERE read=0 AND type='new-tag' AND new_tag <> '' AND EXISTS (
+			SELECT 1 FROM images i
+			WHERE i.name = notifications.image_name
+			  AND i.tag = notifications.new_tag
+			  AND i.status <> 'stale'
+		)`)
+	if err != nil {
+		return 0, err
+	}
+	r2, err := s.db.Exec(`
+		UPDATE notifications SET read=1
+		WHERE read=0 AND type='update' AND new_digest <> '' AND EXISTS (
+			SELECT 1 FROM images i
+			WHERE i.reference = notifications.reference
+			  AND i.local_digest = notifications.new_digest
+		)`)
+	if err != nil {
+		return 0, err
+	}
+	n1, _ := r1.RowsAffected()
+	n2, _ := r2.RowsAffected()
+	return n1 + n2, nil
+}
+
 // MarkDockerImagesMissing 将「source=docker 且当前本机已不再出现」的镜像行标记为 stale（缺失），
 // 用于清理本机已删除镜像在库内的残留。liveRefs 为本轮 Docker 仍存在的引用集合；
 // 仅更新未忽略的项，避免打扰用户手动忽略、但镜像其实已从本机移除的记录。

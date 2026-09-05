@@ -449,6 +449,14 @@ func (s *Scanner) Run(ctx context.Context, force bool) bool {
 	// 清理本机已删除镜像的库内残留：将 source=docker 且本轮不再存在的行标记为 stale（缺失）。
 	s.pruneRemovedDockerImages(ctx)
 	_ = s.store.FinishScan(scanID, checked, updates, "done", "")
+	// 目标已达成的未读通知自动转已读（本地已用上通知的版本 / 摘要已同步），
+	// 过期提醒不再占用未读角标；通知行保留可查。
+	// 强制扫描是刻意的重新广播，不做此消化，保证「找回提醒」语义完整。
+	if !force {
+		if n, err := s.store.AutoReadAchievedNotifications(); err == nil && n > 0 {
+			log.Printf("auto-read %d achieved notification(s)", n)
+		}
+	}
 	// 自动保留策略：扫描结束后裁剪超出上限的最老已读通知（未读永不自动删）。
 	if n, err := s.store.TrimReadNotifications(store.MaxRetainedReadNotifs); err == nil && n > 0 {
 		log.Printf("trimmed %d read notification(s) (keep latest %d)", n, store.MaxRetainedReadNotifs)
