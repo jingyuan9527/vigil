@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { api, fmtTime } from '../api/client'
 import { useTheme } from '../context/ThemeContext'
 import { useAuth } from '../context/AuthContext'
+import Logo from './Logo'
 
 const nav = [
   { to: '/', label: '仪表盘', icon: GridIcon, end: true },
@@ -68,9 +69,7 @@ export default function Layout() {
       {/* 桌面侧边栏（仅 lg 显示） */}
       <aside className="hidden h-dvh shrink-0 flex-col gap-3 border-r border-zinc-100 bg-white px-5 py-7 dark:border-zinc-800 dark:bg-zinc-900 lg:flex lg:w-64">
         <div className="mb-2 flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 text-white shadow-bento">
-            <ShipIcon />
-          </div>
+          <Logo className="h-9 w-9 shadow-bento" />
           <div>
             <div className="text-base font-bold leading-tight">DockMon</div>
             <div className="text-xs text-zinc-400 dark:text-zinc-500">Docker 镜像监控</div>
@@ -121,9 +120,7 @@ export default function Layout() {
       {/* 移动端顶部精简条（仅 <lg） */}
       <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-zinc-100 bg-white px-4 dark:border-zinc-800 dark:bg-zinc-900 lg:hidden">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 text-white shadow-bento">
-            <ShipIcon />
-          </div>
+          <Logo className="h-8 w-8 shadow-bento" />
           <div className="leading-tight">
             <div className="text-sm font-bold">DockMon</div>
             <div className="text-[10px] text-zinc-400 dark:text-zinc-500">
@@ -225,13 +222,6 @@ export default function Layout() {
 }
 
 /* ---------- inline icons ---------- */
-function ShipIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 17h18l-2 4H5l-2-4Z" /><path d="M12 3v9" /><path d="M7 8h10l3 5H4l3-5Z" />
-    </svg>
-  )
-}
 function GridIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

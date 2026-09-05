@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import Logo from '../components/Logo'
 
 export default function Login() {
   const { login } = useAuth()
@@ -47,11 +48,7 @@ export default function Login() {
 
       <div className="relative z-10 w-full max-w-sm space-y-6">
         <div className="text-center">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600 text-white shadow-lg shadow-blue-500/25">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 17h18l-2 4H5l-2-4Z" /><path d="M12 3v9" /><path d="M7 8h10l3 5H4l3-5Z" />
-            </svg>
-          </div>
+          <Logo className="mx-auto block h-16 w-16 shadow-lg shadow-blue-500/25" />
           <h1 className="mt-5 text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">DockMon</h1>
           <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
             {setupRequired ? '首次部署，请设置管理员账号' : '请登录以继续'}
