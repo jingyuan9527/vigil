@@ -135,12 +135,21 @@ func addColumnIfMissing(db *sql.DB, table, column, ddl string) error {
 
 func nowStr() string { return time.Now().UTC().Format(time.RFC3339) }
 
-func parseTime(s string) *time.Time {
-	if s == "" {
-		return nil
-	}
+// parseTime 解析 RFC3339 时间串，非法/空串返回零值。
+// 必须返回值类型：历史实现返回 *time.Time，调用方直接 .UTC() 解引用，
+// 任何脏时间数据（外部导入、手工改库）都会 nil panic 打挂整个接口。
+func parseTime(s string) time.Time {
 	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// parseTimePtr 供 *time.Time 字段使用：零值映射为 nil，JSON 输出保持 null 语义。
+func parseTimePtr(s string) *time.Time {
+	t := parseTime(s)
+	if t.IsZero() {
 		return nil
 	}
 	return &t
@@ -198,8 +207,8 @@ func scanImage(row *sql.Row) (*models.Image, error) {
 		Ignored:       ignored == 1,
 		Mode:          m,
 		EffectiveMode: models.ResolveMode(m, tag),
-		LastCheck:     parseTime(ns(lastCheck)),
-		LastUpdate:    parseTime(ns(lastUpdate)),
+		LastCheck:     parseTimePtr(ns(lastCheck)),
+		LastUpdate:    parseTimePtr(ns(lastUpdate)),
 		Error:         ns(errMsg),
 		CreatedAt:     parseTime(ns(createdAt)).UTC(),
 	}, nil
@@ -457,8 +466,8 @@ func (s *Store) ListImages(status string) ([]models.Image, error) {
 			Ignored:       ignored == 1,
 			Mode:          m,
 			EffectiveMode: models.ResolveMode(m, tag),
-			LastCheck:     parseTime(ns(lastCheck)),
-			LastUpdate:    parseTime(ns(lastUpdate)),
+			LastCheck:     parseTimePtr(ns(lastCheck)),
+			LastUpdate:    parseTimePtr(ns(lastUpdate)),
 			Error:         ns(errMsg),
 			CreatedAt:     parseTime(ns(createdAt)).UTC(),
 		})
@@ -634,7 +643,7 @@ func (s *Store) ListScans(limit int) ([]models.Scan, error) {
 			return nil, err
 		}
 		out = append(out, models.Scan{
-			ID: id, StartedAt: parseTime(startedAt).UTC(), FinishedAt: parseTime(ns(finishedAt)),
+			ID: id, StartedAt: parseTime(startedAt).UTC(), FinishedAt: parseTimePtr(ns(finishedAt)),
 			ImagesChecked: checked, UpdatesFound: updates, Status: ns(status), Error: ns(errMsg),
 		})
 	}
@@ -662,7 +671,7 @@ func (s *Store) LastScan() (*models.Scan, error) {
 		return nil, err
 	}
 	return &models.Scan{
-		ID: id, StartedAt: parseTime(startedAt).UTC(), FinishedAt: parseTime(ns(finishedAt)),
+		ID: id, StartedAt: parseTime(startedAt).UTC(), FinishedAt: parseTimePtr(ns(finishedAt)),
 		ImagesChecked: checked, UpdatesFound: updates, Status: ns(status), Error: ns(errMsg),
 	}, nil
 }
