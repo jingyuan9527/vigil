@@ -89,7 +89,8 @@ func (s *Scanner) collectJobs(ctx context.Context) []job {
 //
 // force=true 时为「强制扫描」：无视去重与已读，对所有存在版本差异的镜像
 // 重新广播 update 通知（含 Pin-Watch 锁定 tag 被覆盖的情况）；纯远端监控镜像
-// 的差异基线从版本时间线重建（prevRemote 已随扫描滚动覆盖，不可用）。
+// 的差异基线从版本时间线重建（prevRemote 已随扫描滚动覆盖，不可用）；
+// Pin-Watch 镜像还按版本号重播「远端存在更高版本 tag」提醒（含首巡基线吞掉的）。
 func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) {
 	ref := registry.ParseRef(j.reference)
 	existing, _ := s.store.GetImageByRef(j.reference)
@@ -220,9 +221,10 @@ func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) 
 		}
 	}
 
-	// Pin-Watch 模式：巡检仓库 tag 列表，发现从未见过的新版本 tag → 弱提醒。
+	// Pin-Watch 模式：巡检仓库 tag 列表，发现从未见过的新版本 tag → 弱提醒；
+	// 强制扫描时额外按版本号重播「远端存在更高版本 tag」的提醒（见 inspectTags）。
 	if rerr == nil && effective == models.ModePinWatch {
-		if s.inspectTags(ctx, img) {
+		if s.inspectTags(ctx, img, force) {
 			found = true
 		}
 	}
@@ -235,7 +237,11 @@ func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) 
 //	首次巡检把全部标签记为已见并建立基线（不通知）；
 //	之后出现从未见过的版本 tag → 每个 tag 生成一条 type=new-tag 通知（每个 tag 仅一次），
 //	并把新 tag 记入已见清单；非版本标签也记为已见但不会触发通知。
-func (s *Scanner) inspectTags(ctx context.Context, img *models.Image) bool {
+//	force=true（「全部重新扫描」）时按版本号比对整个 tag 列表：存在比当前锁定 tag
+//	更高的版本 → 重播最新一个的 new-tag 通知，无视已见基线与历史通知（基线吞掉的
+//	更高版本由此找回），每次强制扫描都会再次提醒；若该 tag 已在本次扫描的新 tag
+//	通知中播报过则跳过，避免同轮重复。
+func (s *Scanner) inspectTags(ctx context.Context, img *models.Image, force bool) bool {
 	if img == nil || img.ID == 0 {
 		return false
 	}
@@ -249,53 +255,105 @@ func (s *Scanner) inspectTags(ctx context.Context, img *models.Image) bool {
 		seen = map[string]bool{}
 	}
 
-	// 首次巡检：建立基线，全部记为已见，不打扰
-	if len(seen) == 0 {
+	// 首次巡检：建立基线，全部记为已见，常规路径不打扰
+	firstInspection := len(seen) == 0
+	if firstInspection {
 		_ = s.store.AddSeenTags(img.ID, tags)
-		return false
 	}
 
-	// 收集本次新出现的 tag（含非版本 tag），并筛出版本 tag 用于通知
-	unseen := make([]string, 0, len(tags))
-	var freshVersionTags []string
+	found := false
+	fresh := map[string]bool{}
+	if !firstInspection {
+		// 收集本次新出现的 tag（含非版本 tag），并筛出版本 tag 用于通知
+		unseen := make([]string, 0, len(tags))
+		var freshVersionTags []string
+		for _, t := range tags {
+			if seen[t] {
+				continue
+			}
+			unseen = append(unseen, t)
+			if _, ok := version.ParseTag(t); ok {
+				fresh[t] = true
+				freshVersionTags = append(freshVersionTags, t)
+			}
+		}
+		if len(unseen) > 0 {
+			_ = s.store.AddSeenTags(img.ID, unseen)
+		}
+
+		webhook := s.settings.Snapshot().DingTalkWebhook
+		secret := s.settings.Snapshot().DingTalkSecret
+		for _, nt := range freshVersionTags {
+			msg := fmt.Sprintf("仓库 %s 发布新版本标签 %s（当前锁定 %s）", img.Name, nt, img.Tag)
+			_ = s.store.CreateNotification(&models.Notification{
+				ImageID:   img.ID,
+				ImageName: img.Name,
+				Reference: img.Reference,
+				OldTag:    img.Tag,
+				NewTag:    nt,
+				Type:      models.NotifNewTag,
+				Message:   msg,
+			})
+			if webhook != "" {
+				go func(ref, cur, newTag string) {
+					if err := notification.NotifyNewTag(webhook, secret, ref, cur, newTag); err != nil {
+						log.Printf("dingtalk notify-newtag failed for %s: %v", ref, err)
+					}
+				}(img.Reference, img.Tag, nt)
+			}
+		}
+		found = len(freshVersionTags) > 0
+	}
+
+	// 强制扫描重播：取比锁定 tag 更新的最高版本 tag；已在本次通知过则跳过。
+	if force {
+		if best := latestNewerVersionTag(tags, img.Tag); best != "" && !fresh[best] {
+			msg := fmt.Sprintf("强制扫描：仓库 %s 已存在更高版本标签 %s（当前锁定 %s）", img.Name, best, img.Tag)
+			_ = s.store.CreateNotification(&models.Notification{
+				ImageID:   img.ID,
+				ImageName: img.Name,
+				Reference: img.Reference,
+				OldTag:    img.Tag,
+				NewTag:    best,
+				Type:      models.NotifNewTag,
+				Message:   msg,
+			})
+			if webhook := s.settings.Snapshot().DingTalkWebhook; webhook != "" {
+				secret := s.settings.Snapshot().DingTalkSecret
+				go func(ref, cur, newTag string) {
+					if err := notification.NotifyNewTag(webhook, secret, ref, cur, newTag); err != nil {
+						log.Printf("dingtalk notify-newtag failed for %s: %v", ref, err)
+					}
+				}(img.Reference, img.Tag, best)
+			}
+			found = true
+		}
+	}
+	return found
+}
+
+// latestNewerVersionTag 在仓库 tag 列表中找版本号高于 pinned 的最高版本 tag；
+// pinned 或候选无法解析为版本号时不算（浮动/描述性 tag 无大小语义）。
+func latestNewerVersionTag(tags []string, pinned string) string {
+	curNums, ok := version.ParseTag(pinned)
+	if !ok {
+		return ""
+	}
+	best := ""
 	for _, t := range tags {
-		if seen[t] {
+		n, ok := version.ParseTag(t)
+		if !ok || version.Compare(n, curNums) <= 0 {
 			continue
 		}
-		unseen = append(unseen, t)
-		if _, ok := version.ParseTag(t); ok {
-			freshVersionTags = append(freshVersionTags, t)
+		if best == "" {
+			best = t
+			continue
+		}
+		if bestNums, ok := version.ParseTag(best); ok && version.Compare(n, bestNums) > 0 {
+			best = t
 		}
 	}
-	if len(unseen) > 0 {
-		_ = s.store.AddSeenTags(img.ID, unseen)
-	}
-	if len(freshVersionTags) == 0 {
-		return false
-	}
-
-	webhook := s.settings.Snapshot().DingTalkWebhook
-	secret := s.settings.Snapshot().DingTalkSecret
-	for _, nt := range freshVersionTags {
-		msg := fmt.Sprintf("仓库 %s 发布新版本标签 %s（当前锁定 %s）", img.Name, nt, img.Tag)
-		_ = s.store.CreateNotification(&models.Notification{
-			ImageID:   img.ID,
-			ImageName: img.Name,
-			Reference: img.Reference,
-			OldTag:    img.Tag,
-			NewTag:    nt,
-			Type:      models.NotifNewTag,
-			Message:   msg,
-		})
-		if webhook != "" {
-			go func(ref, cur, newTag string) {
-				if err := notification.NotifyNewTag(webhook, secret, ref, cur, newTag); err != nil {
-					log.Printf("dingtalk notify-newtag failed for %s: %v", ref, err)
-				}
-			}(img.Reference, img.Tag, nt)
-		}
-	}
-	return true
+	return best
 }
 
 // computeStatus 依据本地摘要、远端摘要与上次远端摘要，判定镜像状态。
@@ -337,7 +395,8 @@ func (s *Scanner) IsRunning() bool { return s.running.Load() }
 
 // Run 执行一次完整扫描。force=true 时为「强制扫描」（通知页「全部重新扫描」）：
 // 无视去重与已读，对所有存在版本差异的镜像重新广播 update 通知（含 Pin-Watch 锁定
-// tag 被覆盖、以及纯远端监控按版本时间线重建基线的镜像），每次触发都会再次通知。
+// tag 被覆盖、以及纯远端监控按版本时间线重建基线的镜像），并按版本号重播 Pin-Watch
+// 镜像「远端存在更高版本 tag」的提醒，每次触发都会再次通知。
 //
 // 返回是否真正启动：定时器、手动扫描、添加镜像可能并发触发，CAS 保证单飞，
 // 重复触发直接跳过（返回 false）。

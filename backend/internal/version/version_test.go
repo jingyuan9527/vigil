@@ -41,3 +41,30 @@ func TestParseTag(t *testing.T) {
 		}
 	}
 }
+
+func TestCompare(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		{"8.4.5", "8.4.5", 0},
+		{"8.4", "8.4.0", 0},
+		{"8.4.5-alpine", "8.4.5", 0},
+		{"8.4.6", "8.4.5", 1},
+		{"8.4.5", "8.4.6", -1},
+		{"26", "8.4.5", 1},
+		{"8.4.5", "26", -1},
+		{"9", "8.4.5", 1},
+		{"1.2.3", "1.10", -1},
+	}
+	for _, c := range cases {
+		na, okA := ParseTag(c.a)
+		nb, okB := ParseTag(c.b)
+		if !okA || !okB {
+			t.Fatalf("ParseTag(%q/%q) unexpectedly unparseable", c.a, c.b)
+		}
+		if got := Compare(na, nb); got != c.want {
+			t.Errorf("Compare(%q, %q) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}

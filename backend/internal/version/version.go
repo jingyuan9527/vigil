@@ -46,3 +46,28 @@ func ParseTag(tag string) (nums, bool) {
 	}
 	return out, true
 }
+
+// Compare 按段比较两个版本序列：a<b 返回 -1，相等返回 0，a>b 返回 1。
+// 缺失的段按 0 处理（8.4 等价 8.4.0），因此 8.4 < 8.4.5、26 > 8.4.5。
+func Compare(a, b nums) int {
+	n := len(a)
+	if len(b) > n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		x, y := 0, 0
+		if i < len(a) {
+			x = a[i]
+		}
+		if i < len(b) {
+			y = b[i]
+		}
+		switch {
+		case x < y:
+			return -1
+		case x > y:
+			return 1
+		}
+	}
+	return 0
+}
