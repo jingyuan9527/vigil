@@ -1,6 +1,28 @@
-# DockMon · Docker 镜像监控
+<div align="center">
 
-[![Build Multi-Arch Image](https://github.com/jingyuan9527/vigil/actions/workflows/build.yml/badge.svg)](https://github.com/jingyuan9527/vigil/actions/workflows/build.yml)
+<img src="docs/logo.svg" width="110" alt="vigil logo" />
+
+# vigil
+
+_应用名 DockMon · Docker 镜像监控_
+
+**🐳 Docker 镜像更新监控与通知 —— 单容器、单端口、开箱即用**
+
+[![License](https://img.shields.io/github/license/jingyuan9527/vigil)](LICENSE)
+[![Release](https://img.shields.io/github/v/tag/jingyuan9527/vigil)](https://github.com/jingyuan9527/vigil/tags)
+[![CI](https://img.shields.io/github/actions/workflow/status/jingyuan9527/vigil/build.yml?branch=main)](https://github.com/jingyuan9527/vigil/actions/workflows/build.yml)
+[![Go](https://img.shields.io/github/go-mod/go-version/jingyuan9527/vigil?filename=backend%2Fgo.mod)](backend/go.mod)
+[![Stars](https://img.shields.io/github/stars/jingyuan9527/vigil?style=social)](https://github.com/jingyuan9527/vigil/stargazers)
+
+![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)
+![Vite](https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3.4-06B6D4?logo=tailwindcss&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-3-003B57?logo=sqlite&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white)
+![GHCR](https://img.shields.io/badge/ghcr.io-jingyuan9527%2Fvigil-2088FF?logo=github&logoColor=white)
+
+</div>
 
 一个参考 [diun](https://github.com/crazy-max/diun) 与 [wud (What's Up Docker)](https://github.com/fmartinou/whats-up-docker) 的 Docker 镜像更新监控工具：自动采集本机镜像（或手动添加监控项），比对注册表摘要与新版本标签，发现更新第一时间推送提醒（站内 + 钉钉）。
 
@@ -217,6 +239,15 @@ cd frontend && npm install && npm run dev
 ```yaml
 image: ghcr.io/jingyuan9527/vigil:1
 ```
+
+---
+
+## 许可证
+
+本项目采用 **AGPL-3.0 双许可**，详见 [LICENSE](LICENSE)：
+
+- **开源使用（默认）**：依据 [GNU AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html) 自由使用、修改与分发；通过网络对外提供本程序或其衍生版本的服务时，需按同一许可证公开对应源代码。
+- **商业授权（可选）**：需要闭源集成、OEM 或不满足 AGPL 义务的商业部署，请联系作者（[GitHub Issues](https://github.com/jingyuan9527/vigil/issues)）获取商业许可。
 
 ---
 
