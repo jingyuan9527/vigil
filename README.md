@@ -202,13 +202,21 @@ cd frontend && npm install && npm run dev
 
 ---
 
-## 多架构镜像
+## 多架构镜像与版本
 
-项目通过 GitHub Actions（[`.github/workflows/build.yml`](.github/workflows/build.yml)）自动构建 `linux/amd64` 与 `linux/arm64` 双架构镜像并推送至 GHCR：
+项目通过 GitHub Actions（[`.github/workflows/build.yml`](.github/workflows/build.yml)）自动构建 `linux/amd64` 与 `linux/arm64` 双架构镜像并推送至 GHCR（QEMU + Buildx 跨架构，复用 Actions 缓存；推送至 GHCR 无需额外配置，`GITHUB_TOKEN` 自动授权）：
 
-- 监听 `main` 分支 push（发布 `latest` 标签）与 `v*` 标签 push（生成对应语义化标签）；Pull Request 仅做构建校验、不推送。
-- 通过 QEMU + Buildx 跨架构构建，复用 GitHub Actions 缓存加速。
-- 推送至 GHCR 无需额外配置（`GITHUB_TOKEN` 自动授权）。
+| 触发 | 产出标签 | 用途 |
+|------|----------|------|
+| push `v1.2.3` 标签 | `1.2.3`、`1.2`、`1`、`latest` | 稳定版 / 锁定大版本 / 回滚 |
+| push 到 `main` | `edge`、`sha-xxxx` | 开发版尝鲜 |
+| Pull Request | 不推送，仅构建校验 | — |
+
+版本号按 [RULES.md](RULES.md) 的语义化版本规则由提交内容自动推导（feat → 次版本，fix → 修订号，破坏性变更 → 主版本）。推荐生产环境锁定大版本，自动获取补丁：
+
+```yaml
+image: ghcr.io/jingyuan9527/vigil:1
+```
 
 ---
 
