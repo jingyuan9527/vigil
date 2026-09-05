@@ -3,17 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { api, fmtTime, fmtShort, shortDigest } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import BentoCard from '../components/BentoCard'
-import StatCard from '../components/StatCard'
 import StatusBadge from '../components/StatusBadge'
 import Spinner from '../components/Spinner'
-
-function IconBox({ path }) {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      {path}
-    </svg>
-  )
-}
 
 const POLL_INTERVAL_MS = 30_000 // 仪表盘轮询间隔（与最小扫描间隔对齐）
 
@@ -98,31 +89,20 @@ export default function Dashboard() {
                 </button>
               ) : (
                 <div className="grid grid-cols-3 gap-3">
-                  <Mini label="最新" value={stats.up_to_date} />
-                  <Mini label="待更新" value={stats.update_available} />
-                  <Mini label="未读" value={stats.unread_notifications} />
+                  <Mini label="已是最新" value={stats.up_to_date} />
+                  <Mini label="有更新" value={stats.update_available} />
+                  <Mini label="未读通知" value={stats.unread_notifications} />
                 </div>
               )}
             </div>
           </div>
         </BentoCard>
 
-        <StatCard label="监控镜像总数" value={stats.total} gradient="from-blue-500 to-violet-600"
-          icon={<IconBox path={<><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>} />} />
-        <StatCard label="有更新可用" value={stats.update_available} gradient="from-orange-400 to-pink-500"
-          icon={<IconBox path={<><path d="M12 2v8" /><path d="m8 6 4-4 4 4" /><circle cx="12" cy="15" r="6" /><path d="M12 12v6" /></>} />} />
-        <StatCard label="已是最新" value={stats.up_to_date} gradient="from-green-400 to-cyan-500"
-          icon={<IconBox path={<><path d="M20 6 9 17l-5-5" /></>} />} />
-        <StatCard label="未读通知" value={stats.unread_notifications} gradient="from-blue-500 to-violet-600"
-          icon={<IconBox path={<><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" /></>} />} />
-
-        {/* 状态分布 */}
-        <BentoCard span="wide">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">状态分布</h3>
-            <span className="text-xs text-zinc-400 dark:text-zinc-500">共 {totalDist} 个镜像</span>
-          </div>
-          <div className="flex h-3 w-full gap-0 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+        {/* 状态分布：图例纵向排列，含未知态（总数见右上「共 N 个镜像」与扫描信息） */}
+        <BentoCard>
+          <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">状态分布</h3>
+          <span className="mt-0.5 block text-xs text-zinc-400 dark:text-zinc-500">共 {totalDist} 个镜像</span>
+          <div className="mt-4 flex h-3 w-full gap-0 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
             {dist.map((d, i) => (
               <div
                 key={d.label}
@@ -134,7 +114,7 @@ export default function Dashboard() {
               />
             ))}
           </div>
-          <div className="mt-4 grid grid-cols-3 gap-3">
+          <div className="mt-4 space-y-2.5">
             {dist.map((d) => (
               <div key={d.label} className="flex items-center gap-2.5 text-sm">
                 <span className={`h-2.5 w-2.5 rounded-full ${d.color}`} />

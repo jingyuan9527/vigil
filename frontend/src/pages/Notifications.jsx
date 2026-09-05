@@ -7,7 +7,7 @@ import Pagination from '../components/Pagination'
 import ConfirmDialog from '../components/ConfirmDialog'
 import { useToast } from '../components/Toast'
 
-const PAGE_SIZE = 8
+const PAGE_SIZE = 6 // 每组单页条数：调小让两组更容易都走分页，避免等高布局下数量悬殊的大片留白
 
 // 分组定义：高优先级在前，互不混排（需求：按优先级分级呈现）。
 const GROUPS = [
@@ -54,6 +54,7 @@ export default function Notifications() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(true) // 后端是否还有更早的通知（每页满 100 条才可能有）
   const [confirmClear, setConfirmClear] = useState(false) // 清空已读确认弹窗
+  const [confirmRescan, setConfirmRescan] = useState(false) // 强制扫描确认弹窗
 
   const load = async (nextCursor, silent) => {
     if (!silent) setLoading(true)
@@ -149,17 +150,32 @@ export default function Notifications() {
     try {
       await api.scanNow(true)
       toast('success', '已触发强制重新扫描，版本差异将逐一补报，结果稍后自动刷新')
-      setTimeout(load, 1500)
-      setTimeout(() => {
-        load()
-        refreshNotifs?.()
-      }, 6000)
+      refreshNotifs?.() // 立刻让顶栏进入 running 态
     } catch {
       toast('error', '触发扫描失败，请重试')
       setScanning(false)
       return
     }
-    setTimeout(() => setScanning(false), 8000)
+    // 轮询扫描状态直到结束：固定延时刷新会停在过期的 running 状态（扫描可能远超 6s）
+    const deadline = Date.now() + 180_000
+    const timer = setInterval(async () => {
+      if (Date.now() > deadline) {
+        clearInterval(timer)
+        setScanning(false)
+        return
+      }
+      try {
+        const s = await api.scans()
+        const cur = s.scans && s.scans[0]
+        if (!cur || cur.status === 'running') return
+        clearInterval(timer)
+        setScanning(false)
+        await load()
+        refreshNotifs?.()
+      } catch {
+        /* 单次轮询失败忽略，下一轮重试 */
+      }
+    }, 3000)
   }
 
   const unread = items.filter((i) => !i.read).length
@@ -205,7 +221,7 @@ export default function Notifications() {
             清空已读
           </button>
           <button
-            onClick={rescanAll}
+            onClick={() => setConfirmRescan(true)}
             disabled={scanning}
             className="inline-flex items-center gap-2 rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-60 active:scale-95 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
           >
@@ -285,6 +301,18 @@ export default function Notifications() {
         </div>
       )}
       </div>
+
+      <ConfirmDialog
+        open={confirmRescan}
+        title="全部重新扫描"
+        description="强制扫描会无视去重与已读，把所有存在版本差异的镜像重新广播通知（含钉钉，每次触发都会再次推送）。适合复盘或找回提醒；只是想检查最新状态请用顶栏「立即扫描」。"
+        confirmText="开始强制扫描"
+        onConfirm={() => {
+          setConfirmRescan(false)
+          rescanAll()
+        }}
+        onCancel={() => setConfirmRescan(false)}
+      />
 
       <ConfirmDialog
         open={confirmClear}
@@ -369,7 +397,7 @@ function NotifGroup({ group, page, collapsed, onToggle, onPage, onMarkRead }) {
                       title="标记为已读"
                       className="shrink-0 rounded-lg border border-zinc-200 px-2 py-0.5 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                     >
-                      已读
+                      标为已读
                     </button>
                   )}
                 </li>

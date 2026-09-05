@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, fmtTime, modeLabel, shortDigest } from '../api/client'
+import { api, fmtTime, fmtShort, modeLabel, shortDigest } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import StatusBadge from '../components/StatusBadge'
 import Spinner from '../components/Spinner'
@@ -8,21 +8,16 @@ import Pagination from '../components/Pagination'
 import ConfirmDialog from '../components/ConfirmDialog'
 import { useToast } from '../components/Toast'
 
-const FILTERS = [
-  { key: '', label: '全部' },
-  { key: 'update-available', label: '有更新' },
-  { key: 'up-to-date', label: '已是最新' },
-  { key: 'ignored', label: '已忽略' },
-  { key: 'unknown', label: '未知' },
-  { key: 'stale', label: '缺失' },
-]
-
-// 概览卡统计项（可点击直接切换过滤）
+// 概览卡统计项：即状态过滤入口（点击切换、再点取消），不再单设一排筛选 chips
 const OVERVIEW = [
   { label: '有更新', key: 'update-available', cls: 'bg-amber-500', activeCls: 'ring-2 ring-amber-500/40 bg-amber-50/60 dark:bg-amber-500/10' },
   { label: '已是最新', key: 'up-to-date', cls: 'bg-emerald-500', activeCls: 'ring-2 ring-emerald-500/40 bg-emerald-50/60 dark:bg-emerald-500/10' },
   { label: '未知', key: 'unknown', cls: 'bg-zinc-400', activeCls: 'ring-2 ring-zinc-400/40 bg-zinc-100 dark:bg-zinc-800' },
   { label: '缺失', key: 'stale', cls: 'bg-rose-500', activeCls: 'ring-2 ring-rose-500/40 bg-rose-50/60 dark:bg-rose-500/10' },
+  {
+    label: '已忽略', key: 'ignored', cls: 'bg-zinc-300 dark:bg-zinc-600', activeCls: 'ring-2 ring-zinc-400/40 bg-zinc-100 dark:bg-zinc-800',
+    count: (list) => list.reduce((n, i) => n + (i.ignored ? 1 : 0), 0), // 忽略是独立标记，不走 status 字段
+  },
 ]
 
 const PAGE_SIZE = 12
@@ -45,9 +40,8 @@ export default function Images() {
   const load = async () => {
     setLoading(true)
     try {
-      // filter=ignored 是本地过滤，不由后端 status 驱动；其余按 status 请求
-      const status = filter === 'ignored' ? '' : filter
-      const r = await api.images(status)
+      // 始终拉取全集：过滤（含已忽略）在客户端完成，保证概览计数不随筛选抖动
+      const r = await api.images()
       setImages(r.images || [])
     } finally {
       setLoading(false)
@@ -67,6 +61,7 @@ export default function Images() {
   const filtered = useMemo(() => {
     let out = images
     if (filter === 'ignored') out = out.filter((i) => i.ignored)
+    else if (filter) out = out.filter((i) => !i.ignored && i.status === filter)
     if (query) out = out.filter((i) => i.reference.toLowerCase().includes(query.toLowerCase()))
     return [...out].sort(
       (a, b) => (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9) || a.reference.localeCompare(b.reference),
@@ -167,28 +162,13 @@ export default function Images() {
       </div>
       </div>
 
-      {/* 筛选 chips（移动端横向滚动）+ 搜索（移动端全宽） */}
-      <div className="shrink-0 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex gap-2.5 overflow-x-auto pb-1 sm:pb-0">
-          {FILTERS.map((f) => (
-            <button
-              key={f.key}
-              onClick={() => setFilter(f.key)}
-              className={`shrink-0 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${
-                filter === f.key
-                  ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
-                  : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300'
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
+      {/* 搜索（状态筛选统一收口在下方「监控概览」统计卡） */}
+      <div className="shrink-0 flex justify-end">
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="搜索引用…"
-          className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-sm outline-none transition-all focus:border-bento-accent focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 sm:w-64 sm:shrink-0"
+          className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-sm outline-none transition-all focus:border-bento-accent focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 sm:w-64"
         />
       </div>
 
@@ -219,18 +199,28 @@ export default function Images() {
         </BentoCard>
       ) : (
         <>
-          {/* 监控概览：可点击的状态过滤入口（整行宽卡，规范 §5.3） */}
+          {/* 监控概览：唯一的状态过滤入口（点击切换，再点取消；计数不随筛选变化） */}
           <BentoCard>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">监控概览</h3>
-              <span className="text-xs text-zinc-400 dark:text-zinc-500">
-                当前匹配 {filtered.length} 个{filter && filter !== 'ignored' ? ' · 点击下方状态可筛选' : ''}
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-zinc-400 dark:text-zinc-500">共 {images.length} 个 · 当前匹配 {filtered.length} 个</span>
+                {filter && (
+                  <button
+                    onClick={() => setFilter('')}
+                    className="rounded-lg bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                  >
+                    取消筛选 ✕
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+            <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
               {OVERVIEW.map((s) => {
-                const v = countStatus(filtered, s.key)
+                const v = s.count ? s.count(images) : countStatus(images, s.key)
                 const active = filter === s.key
+                // 计数为 0 且未激活时隐藏，避免「缺失 0」这类恒零项常驻占位
+                if (v === 0 && !active) return null
                 return (
                   <button
                     key={s.key}
@@ -261,11 +251,14 @@ export default function Images() {
                       </span>
                     )}
                   </div>
-                  <div className="mt-0.5 flex items-center gap-1.5 text-xs text-zinc-400">
-                    <span className={`h-1.5 w-1.5 rounded-full ${img.source === 'docker' ? 'bg-blue-400' : 'bg-zinc-300 dark:bg-zinc-600'}`} />
-                    {img.source === 'docker' ? 'Docker' : '手动'}
-                    <span className="text-zinc-300 dark:text-zinc-600">·</span>
-                    {img.last_check ? fmtTime(img.last_check) : '未扫描'}
+                  <div className="mt-0.5 flex items-center gap-1.5 whitespace-nowrap text-xs text-zinc-400">
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${img.source === 'docker' ? 'bg-blue-400' : 'bg-zinc-300 dark:bg-zinc-600'}`} />
+                    <span className="shrink-0">{img.source === 'docker' ? 'Docker' : '手动'}</span>
+                    <span className="shrink-0 text-zinc-300 dark:text-zinc-600">·</span>
+                    {/* 相对/短时间防换行，完整时间见悬浮提示 */}
+                    <span title={img.last_check ? fmtTime(img.last_check) : undefined}>
+                      {img.last_check ? fmtShort(img.last_check) : '未扫描'}
+                    </span>
                   </div>
                 </div>
                 <StatusBadge status={img.status} />
@@ -284,12 +277,13 @@ export default function Images() {
                   value={img.mode || 'auto'}
                   disabled={img.ignored}
                   onChange={(e) => onSetMode(img, e.target.value)}
-                  title={img.ignored ? '已忽略的镜像不执行检测' : '选择检测模式'}
+                  title={img.ignored ? '已忽略的镜像不执行检测' : `选择检测模式（当前生效：${modeLabel(img.effective_mode)}）`}
                   className="min-w-0 flex-1 truncate rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:border-zinc-300 focus:border-bento-accent focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
                 >
-                  <option value="auto">自动（生效：{modeLabel(img.effective_mode)}）</option>
+                  {/* 选项用短文案，避免四列卡片内文字被截断；生效模式见悬浮提示 */}
+                  <option value="auto">自动</option>
                   <option value="digest-only">仅摘要检测</option>
-                  <option value="pin-watch">锁定+新标签监视</option>
+                  <option value="pin-watch">锁定+新标签</option>
                 </select>
               </div>
 

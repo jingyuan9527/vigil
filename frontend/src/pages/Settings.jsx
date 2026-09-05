@@ -25,6 +25,7 @@ function Toggle({ checked, onChange }) {
 
 export default function Settings() {
   const [form, setForm] = useState(null)
+  const [saved, setSaved] = useState(null) // 最近一次保存的基线，用于「未保存更改」提示
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
@@ -36,6 +37,7 @@ export default function Settings() {
       try {
         const s = await api.settings()
         setForm(s)
+        setSaved(s)
       } catch {
         setMsg({ type: 'error', text: '加载设置失败' })
       } finally {
@@ -45,14 +47,16 @@ export default function Settings() {
   }, [])
 
   const update = (patch) => setForm((f) => ({ ...f, ...patch }))
+  const dirty = !!form && !!saved && JSON.stringify(form) !== JSON.stringify(saved)
 
   const onSave = async (e) => {
     e.preventDefault()
     setSaving(true)
     setMsg(null)
     try {
-      const saved = await api.saveSettings(form)
-      setForm(saved)
+      const s = await api.saveSettings(form)
+      setForm(s)
+      setSaved(s)
       setMsg({ type: 'ok', text: '设置已保存，扫描间隔等将立即生效' })
     } catch {
       setMsg({ type: 'error', text: '保存失败，请重试' })
@@ -148,6 +152,10 @@ export default function Settings() {
               onChange={(e) => update({ registry_mirror: e.target.value })}
               className="mt-3 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
             />
+            <div className="mt-3 space-y-1 text-xs text-zinc-400 dark:text-zinc-500">
+              <p>· Docker Hub 加速：填写镜像代理域名</p>
+              <p>· 私有仓库：填写 registry 主机名（如 harbor.example.com）</p>
+            </div>
           </BentoCard>
 
           {/* 钉钉通知 Webhook */}
@@ -213,18 +221,15 @@ export default function Settings() {
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="submit"
-            disabled={saving}
+            disabled={saving || !dirty}
             className="inline-flex items-center gap-3 rounded-xl bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-60 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
           >
             {saving ? '保存中…' : '保存设置'}
           </button>
-          <button
-            type="button"
-            onClick={() => api.scanNow()}
-            className="rounded-xl border border-zinc-200 px-5 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
-          >
-            立即扫描一次
-          </button>
+          {/* 未保存提示：表单与最近一次保存的基线不一致时高亮，避免改完忘记保存 */}
+          <span className={`text-sm ${dirty ? 'font-medium text-amber-600 dark:text-amber-400' : 'text-zinc-400 dark:text-zinc-500'}`}>
+            {dirty ? '有未保存的更改' : '所有更改已保存'}
+          </span>
         </div>
       </form>
     </div>

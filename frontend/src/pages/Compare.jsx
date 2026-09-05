@@ -28,6 +28,35 @@ const STATUS_DOT = {
   ignored: 'bg-zinc-400',
 }
 
+// 版本号感知的 tag 排序：与后端 version.Compare 一致（按段比较、缺段补 0），
+// 可解析的降序在前（新版本一眼可见），其余（浮动/描述性 tag）按字典序垫底。
+function parseVer(tag) {
+  const m = String(tag).replace(/^v/i, '').match(/^(\d+(?:\.\d+)*)(?:$|[-+._])/)
+  if (!m) return null
+  return m[1].split('.').map(Number)
+}
+function cmpVer(a, b) {
+  const n = Math.max(a.length, b.length)
+  for (let i = 0; i < n; i++) {
+    const x = a[i] || 0
+    const y = b[i] || 0
+    if (x !== y) return x - y
+  }
+  return 0
+}
+function sortTagsVersionFirst(tags) {
+  const numbered = []
+  const others = []
+  for (const t of tags) {
+    const v = parseVer(t)
+    if (v) numbered.push([t, v])
+    else others.push(t)
+  }
+  numbered.sort((a, b) => cmpVer(b[1], a[1]) || b[0].localeCompare(a[0]))
+  others.sort((a, b) => a.localeCompare(b))
+  return [...numbered.map(([t]) => t), ...others]
+}
+
 export default function Compare() {
   const [params, setParams] = useSearchParams()
   const [images, setImages] = useState([])
@@ -86,8 +115,10 @@ export default function Compare() {
 
   const tags = (detail && detail.tags) || []
   const versions = (detail && detail.versions) || []
-  const shownTags = tagsOpen ? tags : tags.slice(0, TAGS_PREVIEW)
+  const sortedTags = useMemo(() => sortTagsVersionFirst(tags), [tags])
+  const shownTags = tagsOpen ? sortedTags : sortedTags.slice(0, TAGS_PREVIEW)
   const shownVersions = tlOpen ? versions : versions.slice(0, TL_PREVIEW)
+  const digestDiff = !!detail && !!detail.image && detail.image.local_digest !== detail.image.remote_digest
 
   return (
     <div className="flex h-full flex-col gap-6 overflow-hidden">
@@ -219,7 +250,8 @@ export default function Compare() {
                 <h3 className="break-all font-semibold text-zinc-900 dark:text-zinc-100">{detail.image.reference}</h3>
                 <StatusBadge status={detail.image.status} />
               </div>
-              <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-zinc-400">
+              {/* 元数据 2×2 网格：避免四组信息挤成一行，窄屏也不易错位 */}
+              <div className="mt-2 grid grid-cols-1 gap-x-5 gap-y-1 text-xs text-zinc-400 sm:grid-cols-2">
                 <span>最近检查：{fmtTime(detail.image.last_check)}</span>
                 <span>远端变更：{fmtTime(detail.image.last_update)}</span>
                 <span>来源：{detail.image.source === 'docker' ? 'Docker 守护进程' : '手动监控'}</span>
@@ -227,8 +259,8 @@ export default function Compare() {
               </div>
               {/* 分隔列（divide-x），不包子卡片（规则 G：禁止嵌套卡片） */}
               <div className="mt-4 flex flex-col gap-4 border-t border-zinc-100 pt-4 sm:flex-row sm:gap-0 sm:divide-x sm:divide-zinc-100 dark:border-zinc-800 dark:sm:divide-zinc-800">
-                <CompareCol title="本地版本" tag={detail.image.tag} digest={shortDigest(detail.image.local_digest)} accent="from-green-400 to-cyan-500" side="left" />
-                <CompareCol title="远端最新" tag={detail.image.tag} digest={shortDigest(detail.image.remote_digest)} accent="from-orange-400 to-pink-500" side="right" />
+                <CompareCol title="本地版本" tag={detail.image.tag} digest={shortDigest(detail.image.local_digest)} accent="from-green-400 to-cyan-500" side="left" changed={digestDiff} />
+                <CompareCol title="远端最新" tag={detail.image.tag} digest={shortDigest(detail.image.remote_digest)} accent="from-orange-400 to-pink-500" side="right" changed={digestDiff} />
               </div>
             </BentoCard>
 
@@ -243,7 +275,7 @@ export default function Compare() {
                     </button>
                   )}
                 </div>
-                <p className="text-xs text-zinc-400">注册表中可拉取的其它版本{tags.length > TAGS_PREVIEW && `（${tagsOpen ? `全部 ${tags.length} 个` : `前 ${TAGS_PREVIEW} 个`}）`}</p>
+                <p className="text-xs text-zinc-400">注册表中可拉取的其它版本，按版本号新→旧排序{tags.length > TAGS_PREVIEW && `（${tagsOpen ? `全部 ${tags.length} 个` : `前 ${TAGS_PREVIEW} 个`}）`}</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {tags.length ? (
                     shownTags.map((t) => (
@@ -309,7 +341,7 @@ export default function Compare() {
 }
 
 // 内部列：无自身边框/阴影/圆角，仅由父级 divide-x 分隔（规范 §5.4 / 规则 G）
-function CompareCol({ title, tag, digest, accent, side }) {
+function CompareCol({ title, tag, digest, accent, side, changed }) {
   return (
     <div className={`min-w-0 flex-1 ${side === 'right' ? 'sm:pl-6' : 'sm:pr-6'}`}>
       <div className="flex items-center gap-3">
@@ -319,7 +351,14 @@ function CompareCol({ title, tag, digest, accent, side }) {
         <span className="text-sm font-medium text-zinc-700 dark:text-zinc-200">{title}</span>
         <span className="ml-auto rounded-lg bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{tag}</span>
       </div>
-      <div className="mt-3 break-all font-mono text-sm leading-relaxed text-zinc-500 dark:text-zinc-400" title={digest}>{digest}</div>
+      {/* 摘要与本地不同（即「有更新」的来源）时高亮，避免两侧 tag 相同看不出差异 */}
+      <div
+        className={`mt-3 break-all font-mono text-sm leading-relaxed ${changed ? 'font-medium text-amber-600 dark:text-amber-400' : 'text-zinc-500 dark:text-zinc-400'}`}
+        title={digest}
+      >
+        {digest}
+        {changed && <span className="ml-2 font-sans text-xs font-normal text-zinc-400 dark:text-zinc-500">已变化</span>}
+      </div>
     </div>
   )
 }

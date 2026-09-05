@@ -39,10 +39,27 @@ export default function Layout() {
     setScanning(true)
     try {
       await api.scanNow()
-      setTimeout(refresh, 1500)
-      setTimeout(refresh, 6000)
+      refresh() // 立刻把顶栏置为 running
     } finally {
-      setTimeout(() => setScanning(false), 8000)
+      // 轮询扫描状态直到结束：扫描耗时随镜像数变化，固定延时刷新会停在过期的 running 状态
+      const deadline = Date.now() + 180_000
+      const timer = setInterval(async () => {
+        if (Date.now() > deadline) {
+          clearInterval(timer)
+          setScanning(false)
+          return
+        }
+        try {
+          const s = await api.scans()
+          const cur = s.scans && s.scans[0]
+          if (!cur || cur.status === 'running') return
+          clearInterval(timer)
+          setScanning(false)
+          refresh()
+        } catch {
+          /* 单次轮询失败忽略，下一轮重试 */
+        }
+      }, 3000)
     }
   }
 
@@ -153,19 +170,12 @@ export default function Layout() {
               {lastScan && (
                 <span className="ml-2">
                   {lastScan.status === 'done'
-                    ? `已检查 ${lastScan.images_checked} 个，发现 ${lastScan.updates_found} 处更新`
-                    : lastScan.status}
+                    ? ` · 已检查 ${lastScan.images_checked} 个，发现 ${lastScan.updates_found} 处更新`
+                    : ` · ${lastScan.status}`}
                 </span>
               )}
             </div>
             <div className="flex items-center gap-3">
-              <button
-                onClick={toggle}
-                className="flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-200 text-zinc-500 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
-                aria-label="切换主题"
-              >
-                {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
-              </button>
               <button
                 onClick={onScan}
                 disabled={scanning}
