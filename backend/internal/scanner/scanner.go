@@ -4,17 +4,18 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"dockmon/internal/config"
-	"dockmon/internal/docker"
-	"dockmon/internal/models"
-	"dockmon/internal/notification"
-	"dockmon/internal/registry"
-	"dockmon/internal/store"
-	"dockmon/internal/version"
+	"vigil/internal/config"
+	"vigil/internal/docker"
+	"vigil/internal/models"
+	"vigil/internal/notification"
+	"vigil/internal/registry"
+	"vigil/internal/store"
+	"vigil/internal/version"
 )
 
 // Scanner 负责采集镜像、按检测模式检测远端版本变化并生成通知。
@@ -22,17 +23,49 @@ type Scanner struct {
 	cfg      *config.Config
 	store    *store.Store
 	docker   *docker.Client
-	reg      *registry.Client
+	reg      atomic.Pointer[registry.Client] // 原子指针：设置页热替换时扫描 goroutine 并发读取
 	settings *config.LiveSettings
 	running  atomic.Bool // 扫描单飞锁：同一时刻只允许一个扫描执行
 }
 
 func New(cfg *config.Config, st *store.Store, dcli *docker.Client, reg *registry.Client, settings *config.LiveSettings) *Scanner {
-	return &Scanner{cfg: cfg, store: st, docker: dcli, reg: reg, settings: settings}
+	s := &Scanner{cfg: cfg, store: st, docker: dcli, settings: settings}
+	s.reg.Store(reg)
+	return s
 }
 
 // SetRegistry 在运行时（页面修改注册表设置后）热替换注册表客户端。
-func (s *Scanner) SetRegistry(reg *registry.Client) { s.reg = reg }
+func (s *Scanner) SetRegistry(reg *registry.Client) { s.reg.Store(reg) }
+
+// registry 返回当前生效的注册表客户端。
+func (s *Scanner) registry() *registry.Client { return s.reg.Load() }
+
+// notifyUpdate 异步推送「有新版本」钉钉通知；未配置 webhook 时静默跳过。
+// 站内通知已同步落库，钉钉失败只记日志、不回滚。
+func (s *Scanner) notifyUpdate(ref, oldDigest, newDigest string) {
+	snap := s.settings.Snapshot()
+	if snap.DingTalkWebhook == "" {
+		return
+	}
+	go func(webhook, secret string) {
+		if err := notification.NotifyUpdate(webhook, secret, ref, oldDigest, newDigest); err != nil {
+			log.Printf("dingtalk notify failed for %s: %v", ref, err)
+		}
+	}(snap.DingTalkWebhook, snap.DingTalkSecret)
+}
+
+// notifyNewTag 异步推送「可选更新」（新版本标签）钉钉通知；未配置 webhook 时静默跳过。
+func (s *Scanner) notifyNewTag(ref, curTag, newTag string) {
+	snap := s.settings.Snapshot()
+	if snap.DingTalkWebhook == "" {
+		return
+	}
+	go func(webhook, secret string) {
+		if err := notification.NotifyNewTag(webhook, secret, ref, curTag, newTag); err != nil {
+			log.Printf("dingtalk notify-newtag failed for %s: %v", ref, err)
+		}
+	}(snap.DingTalkWebhook, snap.DingTalkSecret)
+}
 
 type job struct {
 	reference   string
@@ -109,7 +142,7 @@ func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) 
 	}
 	effective := models.ResolveMode(mode, ref.Tag)
 
-	remote, rerr := s.reg.ManifestDigest(ctx, ref)
+	remote, rerr := s.registry().ManifestDigest(ctx, ref)
 
 	now := time.Now()
 	img := &models.Image{
@@ -209,14 +242,7 @@ func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) 
 				Type:      models.NotifUpdate,
 				Message:   msg,
 			})
-			if webhook := s.settings.Snapshot().DingTalkWebhook; webhook != "" {
-				secret := s.settings.Snapshot().DingTalkSecret
-				go func(ref, oldD, newD string) {
-					if err := notification.NotifyUpdate(webhook, secret, ref, oldD, newD); err != nil {
-						log.Printf("dingtalk notify failed for %s: %v", ref, err)
-					}
-				}(j.reference, old, remote)
-			}
+			s.notifyUpdate(j.reference, old, remote)
 			found = true
 		}
 	}
@@ -245,7 +271,7 @@ func (s *Scanner) inspectTags(ctx context.Context, img *models.Image, force bool
 	if img == nil || img.ID == 0 {
 		return false
 	}
-	tags, err := s.reg.ListTags(ctx, registry.ImageRef{Registry: img.Registry, Repo: img.Name, Tag: img.Tag})
+	tags, err := s.registry().ListTags(ctx, registry.ImageRef{Registry: img.Registry, Repo: img.Name, Tag: img.Tag})
 	if err != nil || len(tags) == 0 {
 		return false
 	}
@@ -281,8 +307,6 @@ func (s *Scanner) inspectTags(ctx context.Context, img *models.Image, force bool
 			_ = s.store.AddSeenTags(img.ID, unseen)
 		}
 
-		webhook := s.settings.Snapshot().DingTalkWebhook
-		secret := s.settings.Snapshot().DingTalkSecret
 		for _, nt := range freshVersionTags {
 			msg := fmt.Sprintf("仓库 %s 发布新版本标签 %s（当前锁定 %s）", img.Name, nt, img.Tag)
 			_ = s.store.CreateNotification(&models.Notification{
@@ -294,13 +318,7 @@ func (s *Scanner) inspectTags(ctx context.Context, img *models.Image, force bool
 				Type:      models.NotifNewTag,
 				Message:   msg,
 			})
-			if webhook != "" {
-				go func(ref, cur, newTag string) {
-					if err := notification.NotifyNewTag(webhook, secret, ref, cur, newTag); err != nil {
-						log.Printf("dingtalk notify-newtag failed for %s: %v", ref, err)
-					}
-				}(img.Reference, img.Tag, nt)
-			}
+			s.notifyNewTag(img.Reference, img.Tag, nt)
 		}
 		found = len(freshVersionTags) > 0
 	}
@@ -318,14 +336,7 @@ func (s *Scanner) inspectTags(ctx context.Context, img *models.Image, force bool
 				Type:      models.NotifNewTag,
 				Message:   msg,
 			})
-			if webhook := s.settings.Snapshot().DingTalkWebhook; webhook != "" {
-				secret := s.settings.Snapshot().DingTalkSecret
-				go func(ref, cur, newTag string) {
-					if err := notification.NotifyNewTag(webhook, secret, ref, cur, newTag); err != nil {
-						log.Printf("dingtalk notify-newtag failed for %s: %v", ref, err)
-					}
-				}(img.Reference, img.Tag, best)
-			}
+			s.notifyNewTag(img.Reference, img.Tag, best)
 			found = true
 		}
 	}
@@ -409,6 +420,8 @@ func (s *Scanner) Run(ctx context.Context, force bool) bool {
 
 	scanID, err := s.store.CreateScan()
 	if err != nil {
+		// 占位失败即放弃本轮：不记日志的话「扫描一直没跑」会无从排查
+		log.Printf("create scan row failed, skip this round: %v", err)
 		return false
 	}
 	jobs := s.collectJobs(ctx)
@@ -419,6 +432,7 @@ func (s *Scanner) Run(ctx context.Context, force bool) bool {
 
 	var mu sync.Mutex
 	var checked, updates int
+	var procErrs []string
 
 	sem := make(chan struct{}, 6)
 	var wg sync.WaitGroup
@@ -431,24 +445,26 @@ func (s *Scanner) Run(ctx context.Context, force bool) bool {
 			jctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 			defer cancel()
 			uf, perr := s.process(jctx, j, force)
+			mu.Lock()
+			defer mu.Unlock()
+			checked++
 			if perr != nil {
-				mu.Lock()
-				checked++
-				mu.Unlock()
+				procErrs = append(procErrs, fmt.Sprintf("%s: %v", j.reference, perr))
 				return
 			}
-			mu.Lock()
-			checked++
 			if uf {
 				updates++
 			}
-			mu.Unlock()
 		}(j)
 	}
 	wg.Wait()
 	// 清理本机已删除镜像的库内残留：将 source=docker 且本轮不再存在的行标记为 stale（缺失）。
 	s.pruneRemovedDockerImages(ctx)
-	_ = s.store.FinishScan(scanID, checked, updates, "done", "")
+	errMsg := truncateErrs(procErrs, 500)
+	if errMsg != "" {
+		log.Printf("scan finished with %d error(s): %s", len(procErrs), errMsg)
+	}
+	_ = s.store.FinishScan(scanID, checked, updates, "done", errMsg)
 	// 目标已达成的未读通知自动转已读（本地已用上通知的版本 / 摘要已同步），
 	// 过期提醒不再占用未读角标；通知行保留可查。
 	// 强制扫描是刻意的重新广播，不做此消化，保证「找回提醒」语义完整。
@@ -462,6 +478,19 @@ func (s *Scanner) Run(ctx context.Context, force bool) bool {
 		log.Printf("trimmed %d read notification(s) (keep latest %d)", n, store.MaxRetainedReadNotifs)
 	}
 	return true
+}
+
+// truncateErrs 把逐镜像错误聚合成单条落库字符串，超长按 rune 截断（引用含中文时防断字）。
+func truncateErrs(errs []string, maxRunes int) string {
+	if len(errs) == 0 {
+		return ""
+	}
+	joined := strings.Join(errs, "; ")
+	r := []rune(joined)
+	if len(r) <= maxRunes {
+		return joined
+	}
+	return string(r[:maxRunes]) + "…"
 }
 
 // pruneRemovedDockerImages 对本机已不存在的 docker 镜像做陈旧标记。
