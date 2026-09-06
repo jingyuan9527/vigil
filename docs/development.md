@@ -130,6 +130,7 @@ backend/internal/store/
 
 - 提交信息：`feat:` / `fix:` / `docs:` / `chore:` / `ci:` / `perf:` / `refactor:` 前缀 + 中文主题，一次提交一个独立功能点（RULES #7）。
 - 版本号语义化、由提交自动推导：`feat:` → MINOR，`fix:`/`perf:` → PATCH，`BREAKING CHANGE` → MAJOR（打 tag 前征得确认）；仅 docs/chore/test/refactor 不打 tag。详见 RULES #12。
+- **触发版本变化的提交必须连同 tag 一起推送远端**（`git push origin main <tag>`），保证 GHCR 镜像与代码同步；MAJOR tag 打前需确认。
 - 已推送的 tag 不可删除或移动（对应 GHCR 镜像标签永久保留供回滚）。
 
 ## 8. CI / 构建

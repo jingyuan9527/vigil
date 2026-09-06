@@ -58,5 +58,6 @@
 - 含 `feat:` → MINOR +1；仅 `fix:` / `perf:` → PATCH +1；破坏性变更（`feat!:` / `fix!:` 或提交正文含 `BREAKING CHANGE:`）→ MAJOR +1，打 tag 前必须征得用户确认。
 - 仅有 `docs:` / `chore:` / `test:` / `refactor:`（无行为变化）→ 不打 tag，版本号不变。
 - 每次提交代码时**至多打一个 tag**（打在最新提交上）；首个版本为 `v1.0.0`。
-- tag 随 push 一起推送远端（push 本身仍需用户明确要求），触发 Actions 构建镜像 `1.2.3` / `1.2` / `1` / `latest`；`main` 分支 push 只产出 `edge`，不影响 `latest`。
+- 触发版本变化的提交（feat/fix 等）打 tag 后，**必须随该提交一并推送远端**（`git push origin main <tag>`），不再单独征求确认；确保 GHCR 镜像始终与代码同步，避免「代码已更、部署镜像仍是旧版」的失联。MAJOR 仍需先确认再打。
+- tag 随 push 触发 Actions 构建镜像 `1.2.3` / `1.2` / `1` / `latest`；`main` 分支 push 只产出 `edge`，不影响 `latest`。
 - 已推送的 tag 不可删除、不可移动（对应镜像标签永久保留，供回滚）。
