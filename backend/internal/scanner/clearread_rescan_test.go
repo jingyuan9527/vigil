@@ -17,9 +17,9 @@ import (
 	"context"
 	"testing"
 
-	"dockmon/internal/config"
-	"dockmon/internal/models"
-	"dockmon/internal/store"
+	"vigil/internal/config"
+	"vigil/internal/models"
+	"vigil/internal/store"
 )
 
 func notifCount(t *testing.T, st *store.Store, typ models.NotificationKind) int {

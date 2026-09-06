@@ -9,12 +9,12 @@ import (
 // Settings 是可在页面上配置、并持久化到数据库的运行时设置。
 // 字段与 Config 中对应的环境变量一一对应，但运行期可被用户覆盖。
 type Settings struct {
-	ScanInterval        int    `json:"scan_interval"`          // 周期扫描间隔（秒），<=0 表示禁用周期扫描
-	RegistryInsecure    bool   `json:"registry_insecure"`      // 是否允许 http 注册表
-	RegistryMirror      string `json:"registry_mirror"`        // 注册表镜像主机（非空时覆盖请求主机）
-	DisableDefaultWatch bool   `json:"disable_default_watch"`  // 关闭内置演示监控列表
-	DingTalkWebhook     string `json:"dingtalk_webhook"`       // 钉钉通知 Webhook URL
-	DingTalkSecret      string `json:"dingtalk_secret"`        // 钉钉机器人加签密钥（为空表示不加签）
+	ScanInterval        int    `json:"scan_interval"`         // 周期扫描间隔（秒），<=0 表示禁用周期扫描
+	RegistryInsecure    bool   `json:"registry_insecure"`     // 是否允许 http 注册表
+	RegistryMirror      string `json:"registry_mirror"`       // 注册表镜像主机（非空时覆盖请求主机）
+	DisableDefaultWatch bool   `json:"disable_default_watch"` // 关闭内置演示监控列表
+	DingTalkWebhook     string `json:"dingtalk_webhook"`      // 钉钉通知 Webhook URL
+	DingTalkSecret      string `json:"dingtalk_secret"`       // 钉钉机器人加签密钥（为空表示不加签）
 }
 
 // ScanMinSeconds 是 scan_interval 在启用状态下允许的最小值，避免过于频繁地打注册表。
@@ -23,8 +23,8 @@ const ScanMinSeconds = 30
 // LiveSettings 是线程安全的运行时可变配置。
 // 由环境变量初始化，可通过页面持久化覆盖；扫描节拍与注册表客户端会实时读取其值。
 type LiveSettings struct {
-	mu                 sync.RWMutex
-	broadcast          chan struct{}
+	mu                  sync.RWMutex
+	broadcast           chan struct{}
 	ScanInterval        int
 	RegistryInsecure    bool
 	RegistryMirror      string

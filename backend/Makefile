@@ -1,7 +1,7 @@
 .PHONY: build run tidy fmt vet
 
 build:
-	cd backend && go build -o ../bin/dockmon ./cmd/server
+	cd backend && go build -o ../bin/vigil ./cmd/server
 
 run:
 	cd backend && go run ./cmd/server

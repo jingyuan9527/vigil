@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"dockmon/internal/models"
+	"vigil/internal/models"
 )
 
 func TestStoreCRUD(t *testing.T) {

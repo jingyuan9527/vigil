@@ -1,6 +1,6 @@
 package models
 
-import "dockmon/internal/version"
+import "vigil/internal/version"
 
 // 检测模式（每个镜像二选一，默认由 ResolveMode 按 tag 自动判定，用户可手动覆写）。
 const (
@@ -17,11 +17,11 @@ const (
 
 // floatingTags 内置浮动标签名单：内容随时间移动，只需 digest 追踪，无需版本巡检。
 var floatingTags = map[string]bool{
-	"latest": true,
+	"latest":  true,
 	"nightly": true,
-	"dev":    true,
-	"canary": true,
-	"beta":   true,
+	"dev":     true,
+	"canary":  true,
+	"beta":    true,
 }
 
 // IsFloatingTag 报告 tag 是否为内置浮动标签。

@@ -49,7 +49,7 @@ export default function Login() {
       <div className="relative z-10 w-full max-w-sm space-y-6">
         <div className="text-center">
           <Logo className="mx-auto block h-16 w-16 shadow-lg shadow-blue-500/25" />
-          <h1 className="mt-5 text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">DockMon</h1>
+          <h1 className="mt-5 text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">Vigil</h1>
           <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
             {setupRequired ? '首次部署，请设置管理员账号' : '请登录以继续'}
           </p>

@@ -3,7 +3,7 @@ package scanner
 import (
 	"testing"
 
-	"dockmon/internal/models"
+	"vigil/internal/models"
 )
 
 func TestComputeStatus(t *testing.T) {

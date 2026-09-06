@@ -80,7 +80,7 @@ func SendDingTalk(webhookURL, secret, title, content string) error {
 
 // NotifyUpdate 发送镜像更新通知到钉钉。secret 非空时自动加签。
 func NotifyUpdate(webhookURL, secret, imageRef, oldDigest, newDigest string) error {
-	title := "DockMon 镜像更新通知"
+	title := "Vigil 镜像更新通知"
 	content := fmt.Sprintf(
 		"### 🔔 镜像更新提醒\n\n"+
 			"**镜像**: %s\n\n"+
@@ -95,7 +95,7 @@ func NotifyUpdate(webhookURL, secret, imageRef, oldDigest, newDigest string) err
 
 // NotifyNewTag 发送「更高独立版本」弱提醒到钉钉。secret 非空时自动加签。
 func NotifyNewTag(webhookURL, secret, imageRef, currentTag, newerTag string) error {
-	title := "DockMon 可选新版本提醒"
+	title := "Vigil 可选新版本提醒"
 	content := fmt.Sprintf(
 		"### ⭐ 镜像出现更新的独立版本\n\n"+
 			"**镜像**: %s\n\n"+

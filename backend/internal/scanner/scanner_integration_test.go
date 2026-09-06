@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"dockmon/internal/config"
-	"dockmon/internal/docker"
-	"dockmon/internal/models"
-	"dockmon/internal/registry"
-	"dockmon/internal/store"
+	"vigil/internal/config"
+	"vigil/internal/docker"
+	"vigil/internal/models"
+	"vigil/internal/registry"
+	"vigil/internal/store"
 )
 
 // newFakeRegistry 构造一个伪造 registry（401->token->200 鉴权路径），

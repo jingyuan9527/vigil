@@ -76,7 +76,7 @@ func NewClientWithMirrorAndHTTP(insecure bool, mirror string, hc *http.Client) *
 	return &Client{
 		http:      hc,
 		insecure:  insecure,
-		userAgent: "dockmon/1.0",
+		userAgent: "vigil/1.0",
 		mirror:    mirror,
 	}
 }

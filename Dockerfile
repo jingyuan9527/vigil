@@ -15,13 +15,13 @@ ENV GOPROXY=https://goproxy.cn,direct
 WORKDIR /src
 COPY backend/ ./
 # go mod tidy 会自动解析并锁定 modernc.org/sqlite 及其依赖与正确版本
-RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -o /out/dockmon ./cmd/server
+RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -o /out/vigil ./cmd/server
 
 # ---------- 阶段 3：运行镜像 ----------
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
-COPY --from=backend /out/dockmon /app/dockmon
+COPY --from=backend /out/vigil /app/vigil
 COPY --from=frontend /app/frontend/dist /app/static
 
 ENV PORT=54321 \
@@ -35,4 +35,4 @@ EXPOSE 54321
 VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://localhost:54321/api/health || exit 1
-ENTRYPOINT ["/app/dockmon"]
+ENTRYPOINT ["/app/vigil"]

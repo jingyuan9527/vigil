@@ -1,15 +1,15 @@
 services:
-  dockmon:
+  vigil:
     build: .
-    image: dockmon:latest
-    container_name: dockmon
+    image: vigil:latest
+    container_name: vigil
     ports:
       - "54321:54321"
     volumes:
       # 挂载宿主 Docker socket 以采集本地镜像
       - /var/run/docker.sock:/var/run/docker.sock
       # 持久化 SQLite 数据库
-      - dockmon-data:/data
+      - dockmon-data:/data  # 数据卷沿用历史名称 dockmon-data：改名会使已有部署的监控数据失联
     environment:
       - PORT=54321
       - DOCKER_HOST=unix:///var/run/docker.sock

@@ -4,7 +4,7 @@
 
 # vigil
 
-_应用名 DockMon · Docker 镜像监控_
+_应用名 Vigil · Docker 镜像监控_
 
 **🐳 Docker 镜像更新监控与通知 —— 单容器、单端口、开箱即用**
 
@@ -57,7 +57,7 @@ _应用名 DockMon · Docker 镜像监控_
 `docker run` 一键启动：
 
 ```bash
-docker run -d --name dockmon \
+docker run -d --name vigil \
   -p 54321:54321 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v dockmon-data:/data \

@@ -71,7 +71,7 @@ export default function Layout() {
         <div className="mb-2 flex items-center gap-2.5">
           <Logo className="h-9 w-9 shadow-bento" />
           <div>
-            <div className="text-base font-bold leading-tight">DockMon</div>
+            <div className="text-base font-bold leading-tight">Vigil</div>
             <div className="text-xs text-zinc-400 dark:text-zinc-500">Docker 镜像监控</div>
           </div>
         </div>
@@ -122,7 +122,7 @@ export default function Layout() {
         <div className="flex items-center gap-2.5">
           <Logo className="h-8 w-8 shadow-bento" />
           <div className="leading-tight">
-            <div className="text-sm font-bold">DockMon</div>
+            <div className="text-sm font-bold">Vigil</div>
             <div className="text-[10px] text-zinc-400 dark:text-zinc-500">
               最近扫描：{lastScan ? fmtTime(lastScan.started_at) : '暂无'}
             </div>

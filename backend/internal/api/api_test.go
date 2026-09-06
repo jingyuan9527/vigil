@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"dockmon/internal/config"
-	"dockmon/internal/registry"
-	"dockmon/internal/scanner"
-	"dockmon/internal/store"
+	"vigil/internal/config"
+	"vigil/internal/registry"
+	"vigil/internal/scanner"
+	"vigil/internal/store"
 )
 
 // TestAPIRouter 在进程内通过 httptest 验证路由 + 存储的关键接口，
@@ -40,13 +40,13 @@ func TestAPIRouter(t *testing.T) {
 	tok := ""
 	for _, part := range strings.Split(setupResp.Header.Get("Set-Cookie"), ";") {
 		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, "dockmon_token=") {
-			tok = strings.TrimPrefix(part, "dockmon_token=")
+		if strings.HasPrefix(part, "vigil_token=") {
+			tok = strings.TrimPrefix(part, "vigil_token=")
 			break
 		}
 	}
 	if tok == "" {
-		t.Fatal("setup did not set dockmon_token cookie")
+		t.Fatal("setup did not set vigil_token cookie")
 	}
 
 	get := func(path string) (int, []byte) {
