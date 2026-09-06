@@ -44,11 +44,9 @@ func TestSignURLMatchesDingTalk(t *testing.T) {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(ts + "\n" + secret))
 	expect := base64.StdEncoding.EncodeToString(mac.Sum(nil))
-	got, err := url.QueryUnescape(sign)
-	if err != nil {
-		t.Fatalf("unescape sign: %v", err)
-	}
-	if got != expect {
-		t.Fatalf("sign mismatch: got %q want %q", got, expect)
+	// Query().Get 已按 form 语义把 %2B 还原为 '+'，不能再 QueryUnescape——
+	// 二次解码会把 '+' 当空格吃掉（历史实现正栽在这里，且仅当签名恰含 '+' 时失败）。
+	if sign != expect {
+		t.Fatalf("sign mismatch: got %q want %q", sign, expect)
 	}
 }
