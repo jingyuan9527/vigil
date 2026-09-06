@@ -447,6 +447,21 @@ func (a *api) handleSettings(w http.ResponseWriter, r *http.Request) {
 		if body.ScanInterval > 0 && body.ScanInterval < config.ScanMinSeconds {
 			body.ScanInterval = config.ScanMinSeconds
 		}
+		// 扫描调度模式校验：interval 缺省兼容旧客户端；daily 必须带合法 HH:MM
+		if body.ScanMode == "" {
+			body.ScanMode = config.ScanModeInterval
+		}
+		if body.ScanMode != config.ScanModeInterval && body.ScanMode != config.ScanModeDaily {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scan_mode 仅支持 interval / daily"})
+			return
+		}
+		body.ScanDailyTime = strings.TrimSpace(body.ScanDailyTime)
+		if body.ScanMode == config.ScanModeDaily {
+			if _, _, ok := config.ParseDailyTime(body.ScanDailyTime); !ok {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scan_daily_time 格式应为 HH:MM（如 03:30）"})
+				return
+			}
+		}
 		body.RegistryMirror = strings.TrimSpace(body.RegistryMirror)
 
 		prev := a.settings.Snapshot()

@@ -343,11 +343,12 @@ nginx:latest            [有更新]
 
 ### 5.6 设置 `/settings`
 - **目标**：配置运行参数与告警，保存即生效。
-- **布局**：页头 + 表单 Bento：扫描间隔(wide,数字输入) / 演示列表(开关) / HTTP 注册表(开关) / 注册表镜像(wide,文本) / 钉钉(wide,Webhook+加签密钥+测试连接)。底部操作（保存 / 立即扫描）。
-- **交互（强制一致性规则 K）**：开关仅写本地 `form`，「保存设置」才 `PUT /settings` 落地；钉钉「测试连接」`testDingTalk`→Toast，空 Webhook 禁用；保存 feedback 条 success/error。
-- **状态**：加载→全页 Spinner；保存中按钮 loading。
-- **[API]**：`settings()`→`{scan_interval,disable_default_watch,registry_insecure,registry_mirror,dingtalk_webhook,dingtalk_secret}`；`saveSettings`;`testDingTalk`;`scanNow`。
-- **移动**：单列；开关卡「左文右开关」不换行；输入全宽；按钮满宽。
+- **布局**：页头 + 表单 Bento：扫描计划(wide) / 演示列表(开关) / HTTP 注册表(开关) / 注册表镜像(wide,文本) / 钉钉(wide,Webhook+加签密钥+测试连接)。底部操作（保存 / 立即扫描）。
+- **扫描计划卡**：标题右侧两态分段按钮「间隔扫描 / 每天定时」（`role=tablist`，选中态白底/深色反转）。间隔模式=数字输入+单位下拉（秒/分钟/小时/天，落库为秒，换单位保持真实秒数、就近取整），副文案实时摘要（如「每 1 天 自动扫描一次」，0=已关闭）；定时模式=`type=time` 输入（HH:MM，服务器本地时区）。两种模式互斥切换，保存后由后端调度生效。
+- **交互（强制一致性规则 K）**：开关与扫描计划仅写本地 `form`，「保存设置」才 `PUT /settings` 落地；钉钉「测试连接」`testDingTalk`→Toast，空 Webhook 禁用；保存 feedback 条 success/error。
+- **状态**：加载→全页 Spinner；加载失败→ErrorState(重试)；保存中按钮 loading。
+- **[API]**：`settings()`→`{scan_interval,scan_mode,scan_daily_time,disable_default_watch,registry_insecure,registry_mirror,dingtalk_webhook,dingtalk_secret}`；`saveSettings`;`testDingTalk`;`scanNow`。
+- **移动**：单列；扫描计划卡模式按钮可换行；开关卡「左文右开关」不换行；输入全宽；按钮满宽。
 
 ---
 

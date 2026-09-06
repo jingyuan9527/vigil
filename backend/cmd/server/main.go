@@ -76,20 +76,35 @@ func main() {
 	// 启动时立即扫描一次
 	go sc.Run(context.Background(), false)
 
-	// 周期扫描：间隔可由页面动态调整，变化时自动重新计时。
+	// 周期/每日定时扫描：调度参数可由页面动态调整，变化时自动重新计时。
 	go func() {
 		for {
-			d := live.ScanIntervalDuration()
-			if d <= 0 {
-				<-live.Changed() // 周期扫描已禁用，等待重新启用
-				continue
-			}
-			tm := time.NewTimer(d)
+			// 先取变更通道再读快照：若变更落在快照后、取通道前，会错过广播死等一整轮
 			ch := live.Changed()
+			snap := live.Snapshot()
+			var tm *time.Timer
+			if snap.ScanMode == config.ScanModeDaily {
+				// 每天定时：算出下一个触发点（服务器本地时区）
+				next, ok := config.NextDailyRun(snap.ScanDailyTime, time.Now())
+				if !ok {
+					log.Printf("invalid scan_daily_time %q, daily scan suspended until settings change", snap.ScanDailyTime)
+					<-ch
+					continue
+				}
+				log.Printf("next daily scan scheduled at %s", next.Format("2006-01-02 15:04"))
+				tm = time.NewTimer(time.Until(next))
+			} else {
+				d := live.ScanIntervalDuration()
+				if d <= 0 {
+					<-ch // 自动扫描已禁用，等待重新启用
+					continue
+				}
+				tm = time.NewTimer(d)
+			}
 			select {
 			case <-tm.C:
 				sc.Run(context.Background(), false)
-				// 扫描结束后重新读取间隔（可能已被页面修改）
+				// 扫描结束后重新读取调度参数（可能已被页面修改）
 			case <-ch:
 				tm.Stop()
 			}

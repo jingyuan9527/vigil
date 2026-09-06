@@ -24,6 +24,29 @@ function Toggle({ checked, onChange }) {
   )
 }
 
+// 间隔单位与秒数的换算（展示层概念，落库仍是秒）
+const INTERVAL_UNITS = [
+  { label: '秒', sec: 1 },
+  { label: '分钟', sec: 60 },
+  { label: '小时', sec: 3600 },
+  { label: '天', sec: 86400 },
+]
+
+// 从秒数选最大能整除的单位（3600 → 1 小时，5400 → 90 分钟）
+function splitInterval(sec) {
+  sec = Math.max(0, sec || 0)
+  for (const u of [...INTERVAL_UNITS].reverse()) {
+    if (sec > 0 && sec % u.sec === 0) return { v: sec / u.sec, unit: u.sec }
+  }
+  return { v: sec, unit: 1 }
+}
+
+function humanInterval(sec) {
+  const s = splitInterval(sec)
+  const u = INTERVAL_UNITS.find((x) => x.sec === s.unit)
+  return `${s.v} ${u.label}`
+}
+
 export default function Settings() {
   const [form, setForm] = useState(null)
   const [saved, setSaved] = useState(null) // 最近一次保存的基线，用于「未保存更改」提示
@@ -33,6 +56,10 @@ export default function Settings() {
   const [testing, setTesting] = useState(false)
   const [testMsg, setTestMsg] = useState(null)
   const [loadError, setLoadError] = useState(false)
+  // 间隔编辑草稿：值 + 单位（秒落库，单位仅前端换算）
+  const [intervalDraft, setIntervalDraft] = useState({ v: 1, unit: 3600 })
+
+  const syncDraft = (sec) => setIntervalDraft(splitInterval(sec))
 
   const loadSettings = async () => {
     setLoading(true)
@@ -41,6 +68,7 @@ export default function Settings() {
       const s = await api.settings()
       setForm(s)
       setSaved(s)
+      syncDraft(s.scan_interval)
     } catch {
       // 失败必须可感知：form 为 null 时不再静默转圈
       setLoadError(true)
@@ -64,9 +92,10 @@ export default function Settings() {
       const s = await api.saveSettings(form)
       setForm(s)
       setSaved(s)
-      setMsg({ type: 'ok', text: '设置已保存，扫描间隔等将立即生效' })
+      syncDraft(s.scan_interval)
+      setMsg({ type: 'ok', text: '设置已保存，扫描计划立即生效' })
     } catch {
-      setMsg({ type: 'error', text: '保存失败，请重试' })
+      setMsg({ type: 'error', text: '保存失败，请检查扫描计划填写后重试' })
     } finally {
       setSaving(false)
     }
@@ -101,25 +130,87 @@ export default function Settings() {
 
       <form onSubmit={onSave} className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
         <div className="bento-grid">
-          {/* 扫描间隔 */}
-          <BentoCard span="wide">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="font-medium text-zinc-900 dark:text-zinc-100">扫描间隔（秒）</div>
-                <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-                  周期扫描的间隔；设为 0 可关闭自动扫描（仍可用「立即扫描」手动触发）。最小 {30} 秒。
-                </div>
+        {/* 扫描计划：间隔扫描（秒/分钟/小时/天）或每天定时 */}
+        <BentoCard span="wide">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="font-medium text-zinc-900 dark:text-zinc-100">扫描计划</div>
+              <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+                {form.scan_mode === 'daily'
+                  ? `每天 ${form.scan_daily_time || '--:--'}（服务器本地时间）自动扫描一次`
+                  : form.scan_interval > 0
+                    ? `每 ${humanInterval(form.scan_interval)} 自动扫描一次`
+                    : '自动扫描已关闭，仍可随时手动触发「立即扫描」'}
               </div>
+            </div>
+            {/* 模式切换：两态分段按钮 */}
+            <div className="flex shrink-0 rounded-xl bg-zinc-100 p-1 dark:bg-zinc-800" role="tablist" aria-label="扫描模式">
+              {[
+                { key: 'interval', label: '间隔扫描' },
+                { key: 'daily', label: '每天定时' },
+              ].map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={(form.scan_mode || 'interval') === m.key}
+                  onClick={() => update({ scan_mode: m.key })}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                    (form.scan_mode || 'interval') === m.key
+                      ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-zinc-100'
+                      : 'text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200'
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {(form.scan_mode || 'interval') === 'daily' ? (
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <input
+                type="time"
+                value={form.scan_daily_time || ''}
+                onChange={(e) => update({ scan_daily_time: e.target.value })}
+                className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+              />
+              <span className="text-xs text-zinc-400 dark:text-zinc-500">每天在该时刻扫描一次（服务器本地时区）</span>
+            </div>
+          ) : (
+            <div className="mt-4 flex flex-wrap items-center gap-3">
               <input
                 type="number"
                 min="0"
                 step="1"
-                value={form.scan_interval}
-                onChange={(e) => update({ scan_interval: parseInt(e.target.value, 10) || 0 })}
-                className="w-32 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-right text-sm text-zinc-900 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                value={intervalDraft.v}
+                onChange={(e) => {
+                  const v = Math.max(0, parseInt(e.target.value, 10) || 0)
+                  setIntervalDraft((d) => ({ ...d, v }))
+                  update({ scan_interval: v * intervalDraft.unit })
+                }}
+                className="w-28 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-right text-sm text-zinc-900 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
               />
+              <select
+                value={intervalDraft.unit}
+                onChange={(e) => {
+                  const u = Number(e.target.value)
+                  // 换单位保持真实秒数不变（1 小时 → 60 分钟），无法整除时就近取整
+                  const total = intervalDraft.v * intervalDraft.unit
+                  const v = Math.round(total / u)
+                  setIntervalDraft({ v, unit: u })
+                  update({ scan_interval: v * u })
+                }}
+                className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+              >
+                {INTERVAL_UNITS.map((u) => (
+                  <option key={u.sec} value={u.sec}>{u.label}</option>
+                ))}
+              </select>
+              <span className="text-xs text-zinc-400 dark:text-zinc-500">设为 0 关闭自动扫描；启用时最小 30 秒</span>
             </div>
-          </BentoCard>
+          )}
+        </BentoCard>
 
           {/* 关闭内置演示监控列表 */}
           <BentoCard>
