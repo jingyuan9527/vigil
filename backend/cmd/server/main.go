@@ -10,13 +10,13 @@ import (
 	"syscall"
 	"time"
 
-	"dockmon/internal/api"
-	"dockmon/internal/auth"
-	"dockmon/internal/config"
-	"dockmon/internal/docker"
-	"dockmon/internal/registry"
-	"dockmon/internal/scanner"
-	"dockmon/internal/store"
+	"vigil/internal/api"
+	"vigil/internal/auth"
+	"vigil/internal/config"
+	"vigil/internal/docker"
+	"vigil/internal/registry"
+	"vigil/internal/scanner"
+	"vigil/internal/store"
 )
 
 func main() {
@@ -39,12 +39,18 @@ func main() {
 	}
 
 	// 若环境变量设置了管理员账号且数据库中尚无管理员，自动创建。
-	if cfg.AdminUser != "" && cfg.AdminPassword != "" && !st.HasAdmin() {
-		hash := auth.HashPassword(cfg.AdminPassword)
-		if err := st.SetAdmin(cfg.AdminUser, hash); err != nil {
-			log.Printf("auto-create admin failed: %v", err)
-		} else {
-			log.Printf("admin account created from env vars (user=%q)", cfg.AdminUser)
+	if cfg.AdminUser != "" && cfg.AdminPassword != "" {
+		has, err := st.HasAdmin()
+		if err != nil {
+			log.Fatalf("check admin existence: %v", err) // 启动期 DB 不可用必须终止，避免带病运行
+		}
+		if !has {
+			hash := auth.HashPassword(cfg.AdminPassword)
+			if err := st.SetAdmin(cfg.AdminUser, hash); err != nil {
+				log.Printf("auto-create admin failed: %v", err)
+			} else {
+				log.Printf("admin account created from env vars (user=%q)", cfg.AdminUser)
+			}
 		}
 	}
 
@@ -97,7 +103,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("dockmon listening on :%s", cfg.Port)
+		log.Printf("vigil listening on :%s", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server: %v", err)
 		}

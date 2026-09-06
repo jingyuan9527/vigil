@@ -3,27 +3,29 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
-	"dockmon/internal/auth"
-	"dockmon/internal/config"
-	"dockmon/internal/models"
-	"dockmon/internal/notification"
-	"dockmon/internal/registry"
-	"dockmon/internal/scanner"
-	"dockmon/internal/store"
+	"vigil/internal/auth"
+	"vigil/internal/config"
+	"vigil/internal/models"
+	"vigil/internal/notification"
+	"vigil/internal/registry"
+	"vigil/internal/scanner"
+	"vigil/internal/store"
 )
 
 type api struct {
 	store        *store.Store
 	scanner      *scanner.Scanner
-	reg          *registry.Client
+	reg          atomic.Pointer[registry.Client] // 原子指针：设置页热替换时 handler 并发读取
 	staticDir    string
 	settings     *config.LiveSettings
 	jwtSecret    []byte
@@ -32,7 +34,8 @@ type api struct {
 
 // NewRouter 构造 HTTP 处理器：/api 走接口，其余路径回退到前端静态资源（SPA）。
 func NewRouter(staticDir string, st *store.Store, sc *scanner.Scanner, reg *registry.Client, settings *config.LiveSettings, jwtSecret []byte) http.Handler {
-	a := &api{store: st, scanner: sc, reg: reg, staticDir: staticDir, settings: settings, jwtSecret: jwtSecret, loginLimiter: auth.NewLoginLimiter()}
+	a := &api{store: st, scanner: sc, staticDir: staticDir, settings: settings, jwtSecret: jwtSecret, loginLimiter: auth.NewLoginLimiter()}
+	a.reg.Store(reg)
 	mux := http.NewServeMux()
 
 	// 认证相关（无需 token）
@@ -111,6 +114,22 @@ func methodNotAllowed(w http.ResponseWriter) {
 	writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 }
 
+// serverError 统一服务端错误响应：对外只给固定文案，内部细节（SQL、路径等）
+// 全部只进日志，避免 err.Error() 泄露给客户端。
+func serverError(w http.ResponseWriter, r *http.Request, err error) {
+	log.Printf("api %s %s: %v", r.Method, r.URL.Path, err)
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "服务器内部错误，请查看服务日志"})
+}
+
+// storeUnavailable 数据库故障下的统一响应：语义为暂时不可用而非内部错误，
+// 提示调用方稍后重试（如 setup 窗口期间拒绝创建管理员）。
+func storeUnavailable(w http.ResponseWriter, r *http.Request, err error) {
+	log.Printf("api %s %s: store unavailable: %v", r.Method, r.URL.Path, err)
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "数据库暂不可用，请稍后再试"})
+}
+
+func (a *api) registry() *registry.Client { return a.reg.Load() }
+
 // ---- handlers ----
 
 func (a *api) health(w http.ResponseWriter, r *http.Request) {
@@ -125,8 +144,13 @@ func (a *api) health(w http.ResponseWriter, r *http.Request) {
 
 // authCheck 返回是否需要初始化设置、当前请求是否已认证。
 func (a *api) authCheck(w http.ResponseWriter, r *http.Request) {
+	has, err := a.store.HasAdmin()
+	if err != nil {
+		storeUnavailable(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"setup_required": !a.store.HasAdmin(),
+		"setup_required": !has,
 		"authenticated":  auth.RequestAuthenticated(r, a.jwtSecret),
 	})
 }
@@ -143,7 +167,13 @@ func (a *api) authSetup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "尝试过于频繁，请稍后再试"})
 		return
 	}
-	if a.store.HasAdmin() {
+	has, err := a.store.HasAdmin()
+	if err != nil {
+		// 必须先失败：DB 故障时吞错会让 setup 重新开放，攻击者可接管管理员
+		storeUnavailable(w, r, err)
+		return
+	}
+	if has {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "管理员已设置，请使用登录接口"})
 		return
 	}
@@ -169,7 +199,7 @@ func (a *api) authSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	hash := auth.HashPassword(body.Password)
 	if err := a.store.SetAdmin(body.Username, hash); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		serverError(w, r, err)
 		return
 	}
 	token, err := auth.GenerateToken(body.Username, a.jwtSecret, 72*time.Hour)
@@ -193,7 +223,12 @@ func (a *api) authLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "尝试过于频繁，请稍后再试"})
 		return
 	}
-	if !a.store.HasAdmin() {
+	has, err := a.store.HasAdmin()
+	if err != nil {
+		storeUnavailable(w, r, err)
+		return
+	}
+	if !has {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请先完成初始设置"})
 		return
 	}
@@ -206,11 +241,23 @@ func (a *api) authLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	storedUser, storedHash := a.store.GetAdmin()
+	storedUser, storedHash, err := a.store.GetAdmin()
+	if err != nil {
+		storeUnavailable(w, r, err)
+		return
+	}
 	if body.Username != storedUser || !auth.CheckPassword(storedHash, body.Password) {
 		a.loginLimiter.RecordFailure(ip)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "用户名或密码错误"})
 		return
+	}
+	// 旧格式哈希（单轮 SHA-256+salt）登录成功即升级为 bcrypt，之后自动淘汰旧格式
+	if auth.NeedsRehash(storedHash) {
+		if h := auth.HashPassword(body.Password); a.store.SetAdmin(storedUser, h) == nil {
+			log.Printf("admin password rehashed to bcrypt on login")
+		} else {
+			log.Printf("admin password rehash persist failed (login continues with legacy hash)")
+		}
 	}
 	token, err := auth.GenerateToken(body.Username, a.jwtSecret, 72*time.Hour)
 	if err != nil {
@@ -235,7 +282,7 @@ func (a *api) authLogout(w http.ResponseWriter, r *http.Request) {
 func (a *api) stats(w http.ResponseWriter, r *http.Request) {
 	st, err := a.store.Stats()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		serverError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
@@ -247,7 +294,7 @@ func (a *api) handleImages(w http.ResponseWriter, r *http.Request) {
 		status := r.URL.Query().Get("status")
 		imgs, err := a.store.ListImages(status)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			serverError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"images": imgs, "count": len(imgs)})
@@ -271,7 +318,7 @@ func (a *api) handleImages(w http.ResponseWriter, r *http.Request) {
 				Source: "manual", Status: models.StatusUnknown, CreatedAt: time.Now(),
 			}
 			if err := a.store.UpsertImage(img); err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				serverError(w, r, err)
 				return
 			}
 		}
@@ -301,7 +348,7 @@ func (a *api) handleImageByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := a.store.SetIgnored(id, body.Ignored); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			serverError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"ignored": body.Ignored})
@@ -324,7 +371,7 @@ func (a *api) handleImageByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := a.store.SetMode(id, body.Mode); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			serverError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"mode": body.Mode})
@@ -333,7 +380,7 @@ func (a *api) handleImageByID(w http.ResponseWriter, r *http.Request) {
 
 	img, err := a.store.GetImage(id)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		serverError(w, r, err)
 		return
 	}
 	if img == nil {
@@ -342,18 +389,22 @@ func (a *api) handleImageByID(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		versions, _ := a.store.ListVersions(id)
+		versions, err := a.store.ListVersions(id)
+		if err != nil {
+			// 时间线查询失败只降级（详情主体仍可用），但必须留痕
+			log.Printf("api %s %s: list versions: %v", r.Method, r.URL.Path, err)
+		}
 		detail := models.ImageDetail{Image: *img, Versions: versions}
 		if img.Registry != "" {
 			ref := registry.ImageRef{Registry: img.Registry, Repo: img.Name, Tag: img.Tag}
-			if tags, terr := a.reg.ListTags(context.Background(), ref); terr == nil {
+			if tags, terr := a.registry().ListTags(context.Background(), ref); terr == nil {
 				detail.Tags = tags
 			}
 		}
 		writeJSON(w, http.StatusOK, detail)
 	case http.MethodDelete:
 		if err := a.store.DeleteImage(id); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			serverError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"result": "deleted"})
@@ -403,14 +454,14 @@ func (a *api) handleSettings(w http.ResponseWriter, r *http.Request) {
 		next := a.settings.Snapshot()
 
 		if err := a.store.SaveSettingsMap(config.SettingsToMap(next)); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			serverError(w, r, err)
 			return
 		}
 
-		// 注册表相关字段变更：热重建客户端并同步 scanner 与接口自身
+		// 注册表相关字段变更：热重建客户端并同步 scanner 与接口自身（原子替换，无锁竞争）
 		if prev.RegistryInsecure != next.RegistryInsecure || prev.RegistryMirror != next.RegistryMirror {
 			newReg := registry.NewClientWithMirror(next.RegistryInsecure, next.RegistryMirror)
-			a.reg = newReg
+			a.reg.Store(newReg)
 			a.scanner.SetRegistry(newReg)
 		}
 
@@ -423,7 +474,7 @@ func (a *api) handleSettings(w http.ResponseWriter, r *http.Request) {
 func (a *api) scans(w http.ResponseWriter, r *http.Request) {
 	list, err := a.store.ListScans(20)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		serverError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"scans": list, "count": len(list)})
@@ -443,7 +494,7 @@ func (a *api) notifications(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := a.store.ListNotifications(unread, cursorID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		serverError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"notifications": list, "count": len(list)})
@@ -459,7 +510,7 @@ func (a *api) notificationByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) >= 2 && parts[1] == "read" && r.Method == http.MethodPost {
 		if err := a.store.MarkRead(id); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			serverError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"result": "ok"})
@@ -474,7 +525,7 @@ func (a *api) notificationsReadAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.MarkAllRead(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		serverError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"result": "ok"})
@@ -489,7 +540,7 @@ func (a *api) notificationsClearRead(w http.ResponseWriter, r *http.Request) {
 	}
 	n, err := a.store.ClearReadNotifications()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		serverError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"result": "ok", "deleted": n})
@@ -522,8 +573,8 @@ func (a *api) testDingTalk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := notification.SendDingTalk(webhook, secret,
-		"DockMon 连通性测试",
-		"### ✅ 连通性测试成功\n\n这是一条来自 DockMon 的测试消息，说明钉钉通知配置正确。\n\n**时间**: "+time.Now().Format("2006-01-02 15:04:05"),
+		"Vigil 连通性测试",
+		"### ✅ 连通性测试成功\n\n这是一条来自 Vigil 的测试消息，说明钉钉通知配置正确。\n\n**时间**: "+time.Now().Format("2006-01-02 15:04:05"),
 	)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": false, "error": err.Error()})
