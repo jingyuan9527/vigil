@@ -22,6 +22,9 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=backend /out/vigil /app/vigil
+# 历史镜像（≤v1.2.0）的二进制为 /app/dockmon；原地升级的容器 entrypoint 已固化在
+# 容器配置中，保留旧路径符号链接使 1Panel/watchtower 等换镜像不换配置的工具无感升级
+RUN ln -s vigil /app/dockmon
 COPY --from=frontend /app/frontend/dist /app/static
 
 ENV PORT=54321 \
