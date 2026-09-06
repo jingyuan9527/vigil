@@ -6,6 +6,7 @@ import StatusBadge from '../components/StatusBadge'
 import Spinner from '../components/Spinner'
 import Pagination from '../components/Pagination'
 import ConfirmDialog from '../components/ConfirmDialog'
+import ErrorState from '../components/ErrorState'
 import { useToast } from '../components/Toast'
 
 // 概览卡统计项：即状态过滤入口（点击切换、再点取消），不再单设一排筛选 chips
@@ -35,6 +36,7 @@ export default function Images() {
   const [page, setPage] = useState(1)
   const [newRef, setNewRef] = useState('')
   const [adding, setAdding] = useState(false)
+  const [loadError, setLoadError] = useState(false)
   const [confirmId, setConfirmId] = useState(null) // 待确认移除的镜像 id
 
   const load = async () => {
@@ -43,6 +45,10 @@ export default function Images() {
       // 始终拉取全集：过滤（含已忽略）在客户端完成，保证概览计数不随筛选抖动
       const r = await api.images()
       setImages(r.images || [])
+      setLoadError(false)
+    } catch {
+      // 失败必须可感知：给出错误态与重试入口，而不是静默停在旧数据
+      setLoadError(true)
     } finally {
       setLoading(false)
     }
@@ -175,6 +181,8 @@ export default function Images() {
       <div className="min-h-0 flex-1 overflow-y-auto pr-1">
       {loading ? (
         <Spinner label="加载镜像…" />
+      ) : loadError ? (
+        <ErrorState message="镜像列表加载失败" onRetry={load} />
       ) : images.length === 0 ? (
         <BentoCard className="py-10 text-center">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500">

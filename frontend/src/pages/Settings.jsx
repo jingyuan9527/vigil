@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import Spinner from '../components/Spinner'
+import ErrorState from '../components/ErrorState'
 
 function Toggle({ checked, onChange }) {
   return (
@@ -31,19 +32,25 @@ export default function Settings() {
   const [msg, setMsg] = useState(null)
   const [testing, setTesting] = useState(false)
   const [testMsg, setTestMsg] = useState(null)
+  const [loadError, setLoadError] = useState(false)
+
+  const loadSettings = async () => {
+    setLoading(true)
+    setLoadError(false)
+    try {
+      const s = await api.settings()
+      setForm(s)
+      setSaved(s)
+    } catch {
+      // 失败必须可感知：form 为 null 时不再静默转圈
+      setLoadError(true)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
-    ;(async () => {
-      try {
-        const s = await api.settings()
-        setForm(s)
-        setSaved(s)
-      } catch {
-        setMsg({ type: 'error', text: '加载设置失败' })
-      } finally {
-        setLoading(false)
-      }
-    })()
+    loadSettings()
   }, [])
 
   const update = (patch) => setForm((f) => ({ ...f, ...patch }))
@@ -82,7 +89,8 @@ export default function Settings() {
     }
   }
 
-  if (loading || !form) return <Spinner label="加载设置…" />
+  if (loading) return <Spinner label="加载设置…" />
+  if (!form) return <ErrorState message="设置加载失败" onRetry={loadSettings} />
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-hidden">

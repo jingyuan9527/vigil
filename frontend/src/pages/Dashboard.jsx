@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext'
 import BentoCard from '../components/BentoCard'
 import StatusBadge from '../components/StatusBadge'
 import Spinner from '../components/Spinner'
+import ErrorState from '../components/ErrorState'
 
 const POLL_INTERVAL_MS = 30_000 // 仪表盘轮询间隔（与最小扫描间隔对齐）
 
@@ -15,6 +16,7 @@ export default function Dashboard() {
   const [images, setImages] = useState([])
   const [notifs, setNotifs] = useState([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
   const loadedRef = useRef(false)
 
   const loadAll = async () => {
@@ -23,11 +25,19 @@ export default function Dashboard() {
       setStats(s)
       setImages(imgs.images || [])
       setNotifs((n.notifications || []).slice(0, 6))
+      setError(false)
     } catch {
-      // ignore
+      // 首屏失败必须可感知：保留旧数据照常轮询，但无数据时给出错误态
+      setError(true)
     } finally {
       setLoading(false)
     }
+  }
+
+  const retry = () => {
+    setError(false)
+    setLoading(true)
+    loadAll()
   }
 
   // 注册轮询入口，供其他页面主动触发刷新；首屏加载只做一次
@@ -46,7 +56,8 @@ export default function Dashboard() {
     }
   }, [])
 
-  if (loading || !stats) return <Spinner label="加载仪表盘…" />
+  if (loading) return <Spinner label="加载仪表盘…" />
+  if (!stats) return error ? <ErrorState message="仪表盘数据加载失败" onRetry={retry} /> : <Spinner label="加载仪表盘…" />
 
   const updates = images.filter((i) => i.status === 'update-available')
   const dist = [

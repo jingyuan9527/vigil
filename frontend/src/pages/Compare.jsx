@@ -4,6 +4,7 @@ import { api, fmtTime, modeLabel, shortDigest } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import StatusBadge from '../components/StatusBadge'
 import Spinner from '../components/Spinner'
+import ErrorState from '../components/ErrorState'
 
 const TAGS_PREVIEW = 24 // 可用标签默认展示数，超出折叠
 const TL_PREVIEW = 10 // 版本时间线默认展示条数，超出折叠
@@ -63,6 +64,7 @@ export default function Compare() {
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(true)
   const [loadingDetail, setLoadingDetail] = useState(false)
+  const [listError, setListError] = useState(false)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('')
   const [chipsOpen, setChipsOpen] = useState(false) // 移动端 chip 列表展开
@@ -71,18 +73,25 @@ export default function Compare() {
 
   const id = params.get('id')
 
-  useEffect(() => {
-    ;(async () => {
-      try {
-        const r = await api.images()
-        setImages(r.images || [])
-        if (!id && r.images && r.images.length) {
-          setParams({ id: String(r.images[0].id) }, { replace: true })
-        }
-      } finally {
-        setLoading(false)
+  const fetchList = async () => {
+    setLoading(true)
+    setListError(false)
+    try {
+      const r = await api.images()
+      setImages(r.images || [])
+      if (!id && r.images && r.images.length) {
+        setParams({ id: String(r.images[0].id) }, { replace: true })
       }
-    })()
+    } catch {
+      // 列表失败给出错误态与重试，而不是静默呈现「暂无镜像」误导用户
+      setListError(true)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchList()
     // eslint-disable-next-line
   }, [])
 
@@ -201,6 +210,8 @@ export default function Compare() {
           <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1">
             {loading ? (
               <Spinner />
+            ) : listError ? (
+              <ErrorState message="镜像列表加载失败" onRetry={fetchList} />
             ) : images.length === 0 ? (
               <BentoCard className="text-center text-sm text-zinc-400 dark:text-zinc-500">暂无镜像</BentoCard>
             ) : filteredImages.length === 0 ? (

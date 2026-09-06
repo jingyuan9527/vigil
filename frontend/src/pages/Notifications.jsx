@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { api, fmtShort, shortDigest } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import Spinner from '../components/Spinner'
 import Pagination from '../components/Pagination'
 import ConfirmDialog from '../components/ConfirmDialog'
+import ErrorState from '../components/ErrorState'
 import { useToast } from '../components/Toast'
 
 const PAGE_SIZE = 6 // 每组单页条数：调小让两组更容易都走分页，避免等高布局下数量悬殊的大片留白
@@ -55,6 +56,11 @@ export default function Notifications() {
   const [hasMore, setHasMore] = useState(true) // 后端是否还有更早的通知（每页满 100 条才可能有）
   const [confirmClear, setConfirmClear] = useState(false) // 清空已读确认弹窗
   const [confirmRescan, setConfirmRescan] = useState(false) // 强制扫描确认弹窗
+  const [loadError, setLoadError] = useState(false)
+  const pollRef = useRef(null) // 强制扫描轮询器：登记到 ref 供卸载清理
+
+  // 卸载时清掉仍在跑的扫描轮询，防止悬空定时器继续 setState
+  useEffect(() => () => clearInterval(pollRef.current), [])
 
   const load = async (nextCursor, silent) => {
     if (!silent) setLoading(true)
@@ -70,6 +76,9 @@ export default function Notifications() {
         setItems(notified)
         setCursor(notified.length > 0 ? notified[notified.length - 1].id : 0)
       }
+      setLoadError(false)
+    } catch {
+      setLoadError(true)
     } finally {
       setLoading(false)
     }
@@ -158,9 +167,10 @@ export default function Notifications() {
     }
     // 轮询扫描状态直到结束：固定延时刷新会停在过期的 running 状态（扫描可能远超 6s）
     const deadline = Date.now() + 180_000
-    const timer = setInterval(async () => {
+    clearInterval(pollRef.current) // 组件生命周期内重复触发时先清旧轮询
+    pollRef.current = setInterval(async () => {
       if (Date.now() > deadline) {
-        clearInterval(timer)
+        clearInterval(pollRef.current)
         setScanning(false)
         return
       }
@@ -168,7 +178,7 @@ export default function Notifications() {
         const s = await api.scans()
         const cur = s.scans && s.scans[0]
         if (!cur || cur.status === 'running') return
-        clearInterval(timer)
+        clearInterval(pollRef.current)
         setScanning(false)
         await load()
         refreshNotifs?.()
@@ -253,6 +263,8 @@ export default function Notifications() {
       <div className="min-h-0 flex-1 overflow-y-auto pr-1">
       {loading ? (
         <Spinner label="加载通知…" />
+      ) : loadError ? (
+        <ErrorState message="通知加载失败" onRetry={() => load()} />
       ) : !hasAny ? (
         <BentoCard className="py-10 text-center">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500">
