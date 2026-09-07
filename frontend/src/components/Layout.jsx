@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { api, fmtTime } from '../api/client'
+import { api, fmtTime, SCAN_DONE_EVENT } from '../api/client'
 import { useTheme } from '../context/ThemeContext'
 import { useAuth } from '../context/AuthContext'
 import Logo from './Logo'
@@ -48,6 +48,7 @@ export default function Layout() {
         if (Date.now() > deadline) {
           clearInterval(timer)
           setScanning(false)
+          window.dispatchEvent(new Event(SCAN_DONE_EVENT))
           return
         }
         try {
@@ -57,6 +58,8 @@ export default function Layout() {
           clearInterval(timer)
           setScanning(false)
           refresh()
+          // 广播扫描完成：镜像列表 / 版本对比页据此自动刷新数据
+          window.dispatchEvent(new Event(SCAN_DONE_EVENT))
         } catch {
           /* 单次轮询失败忽略，下一轮重试 */
         }

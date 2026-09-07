@@ -19,7 +19,7 @@ type Image struct {
 	Reference     string      `json:"reference"` // 被监控的完整引用，如 nginx:latest
 	Registry      string      `json:"registry"`  // 注册表主机
 	Tag           string      `json:"tag"`
-	Source        string      `json:"source"`       // docker | manual
+	Source        string      `json:"source"`       // docker | manual | default（内置演示监控列表）
 	LocalDigest   string      `json:"local_digest"` // 本地已拉取的摘要
 	RemoteDigest  string      `json:"remote_digest"`
 	Status        ImageStatus `json:"status"`

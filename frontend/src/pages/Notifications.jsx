@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { api, fmtShort, shortDigest } from '../api/client'
+import { api, fmtShort, shortDigest, SCAN_DONE_EVENT } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import Spinner from '../components/Spinner'
 import Pagination from '../components/Pagination'
@@ -182,6 +182,8 @@ export default function Notifications() {
         setScanning(false)
         await load()
         refreshNotifs?.()
+        // 广播扫描完成：镜像列表 / 版本对比页据此自动刷新数据
+        window.dispatchEvent(new Event(SCAN_DONE_EVENT))
       } catch {
         /* 单次轮询失败忽略，下一轮重试 */
       }

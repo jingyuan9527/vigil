@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	"vigil/internal/models"
@@ -101,8 +102,13 @@ func (s *Store) UpsertImage(img *models.Image) error {
 // 但该镜像的去重基线一并清除：重新添加同名引用会从零开始建立基线，
 // 首次扫描按新基线记录、不会误报「有更新」，也不会被旧基线吞掉新告警。
 func (s *Store) DeleteImage(id int64) error {
-	_, err := s.db.Exec("DELETE FROM images WHERE id=?", id)
-	if err != nil {
+	return s.deleteImageRow(id)
+}
+
+// deleteImageRow 删除镜像行及其派生数据（已见标签、版本快照、去重基线）。
+// 通知行保留（见 DeleteImage 语义说明）。
+func (s *Store) deleteImageRow(id int64) error {
+	if _, err := s.db.Exec("DELETE FROM images WHERE id=?", id); err != nil {
 		return err
 	}
 	_, _ = s.db.Exec("DELETE FROM image_seen_tags WHERE image_id=?", id)
@@ -153,6 +159,57 @@ func (s *Store) ListImages(status string) ([]models.Image, error) {
 		out = append(out, *img)
 	}
 	return out, rows.Err()
+}
+
+// DeleteDefaultWatchImages 删除「内置演示监控列表」产生的镜像行及其派生数据。
+// 命中条件（同一行需满足）：
+//   - reference 属于演示清单 refs（由调用方传入当前 DefaultWatch）
+//   - source 为 "default"（演示列表新产生，见 scanner.collectJobs），
+//     或旧版本遗留的 manual 纯远端 watch 形态（source=manual 且无本地摘要、
+//     无 registry 前缀）——升级前演示行正是这种外形；
+//
+// 本地 Docker 镜像行（source=docker）、带本地摘要或私有 registry 前缀的
+// 手动行不受影响。通知历史保留（与 DeleteImage 语义一致）。
+// 返回删除的行数。
+func (s *Store) DeleteDefaultWatchImages(refs []string) (int64, error) {
+	if len(refs) == 0 {
+		return 0, nil
+	}
+	ph := strings.Repeat("?,", len(refs))
+	ph = ph[:len(ph)-1]
+	args := make([]interface{}, 0, len(refs)+1)
+	for _, r := range refs {
+		args = append(args, r)
+	}
+	args = append(args, "default")
+	rows, err := s.db.Query(
+		`SELECT id FROM images
+		 WHERE reference IN (`+ph+`)
+		   AND (source = ? OR (source = 'manual' AND (local_digest IS NULL OR local_digest = '') AND (registry IS NULL OR registry = '')))`,
+		args...)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	var n int64
+	for _, id := range ids {
+		if err := s.deleteImageRow(id); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
 
 // MarkDockerImagesMissing 将「source=docker 且当前本机已不再出现」的镜像行标记为 stale（缺失），

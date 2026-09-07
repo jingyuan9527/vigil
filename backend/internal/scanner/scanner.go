@@ -40,6 +40,10 @@ func (s *Scanner) SetRegistry(reg *registry.Client) { s.reg.Store(reg) }
 // registry 返回当前生效的注册表客户端。
 func (s *Scanner) registry() *registry.Client { return s.reg.Load() }
 
+// DefaultWatchRefs 返回内置演示监控列表的引用，
+// 供设置页关闭演示列表时清理已产生的演示镜像行。
+func (s *Scanner) DefaultWatchRefs() []string { return s.cfg.DefaultWatch }
+
 // notifyUpdate 异步推送「有新版本」钉钉通知；未配置 webhook 时静默跳过。
 // 站内通知已同步落库，钉钉失败只记日志、不回滚。
 func (s *Scanner) notifyUpdate(ref, oldDigest, newDigest string) {
@@ -112,7 +116,9 @@ func (s *Scanner) collectJobs(ctx context.Context) []job {
 	}
 	if !s.settings.Snapshot().DisableDefaultWatch {
 		for _, ref := range s.cfg.DefaultWatch {
-			add(ref, "", "manual")
+			// source=default 标识「演示监控列表」产生的行，与用户手动添加
+			// （manual）区分开：关闭演示列表时据此精确清理历史数据。
+			add(ref, "", "default")
 		}
 	}
 	return jobs

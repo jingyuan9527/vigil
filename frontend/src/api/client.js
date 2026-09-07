@@ -1,5 +1,9 @@
 const API = '/api'
 
+// 扫描完成事件名：顶栏「立即扫描」与通知页「全部重新扫描」在扫描结束后
+// 广播该事件；镜像列表 / 版本对比页监听后自动刷新，无需手动刷新页面。
+export const SCAN_DONE_EVENT = 'vigil:scan-done'
+
 // 认证基于 httpOnly cookie（SameSite=Lax）：同源 fetch 自动携带，
 // JS 不再持有/读写令牌，降低 XSS 窃取面。令牌无效时刷新页面，
 // 由 AuthProvider 重新校验并回到登录页。

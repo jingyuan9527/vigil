@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api, fmtTime, modeLabel, shortDigest } from '../api/client'
+import { api, fmtTime, modeLabel, shortDigest, SCAN_DONE_EVENT } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import StatusBadge from '../components/StatusBadge'
 import Spinner from '../components/Spinner'
@@ -95,16 +95,31 @@ export default function Compare() {
     // eslint-disable-next-line
   }, [])
 
-  useEffect(() => {
-    if (!id) return
+  const fetchDetail = async (iid) => {
+    if (!iid) return
     setLoadingDetail(true)
     setTagsOpen(false)
     setTlOpen(false)
     api
-      .image(id)
+      .image(iid)
       .then(setDetail)
       .catch(() => setDetail(null))
       .finally(() => setLoadingDetail(false))
+  }
+
+  useEffect(() => {
+    if (!id) return
+    fetchDetail(id)
+  }, [id])
+
+  // 顶栏「立即扫描」/ 通知页「全部重新扫描」结束后自动刷新列表与当前详情
+  useEffect(() => {
+    const onScanDone = () => {
+      fetchList()
+      fetchDetail(id)
+    }
+    window.addEventListener(SCAN_DONE_EVENT, onScanDone)
+    return () => window.removeEventListener(SCAN_DONE_EVENT, onScanDone)
   }, [id])
 
   // 选择器列表：搜索 + 状态过滤 + 有更新优先排序
@@ -265,7 +280,7 @@ export default function Compare() {
               <div className="mt-2 grid grid-cols-1 gap-x-5 gap-y-1 text-xs text-zinc-400 sm:grid-cols-2">
                 <span>最近检查：{fmtTime(detail.image.last_check)}</span>
                 <span>远端变更：{fmtTime(detail.image.last_update)}</span>
-                <span>来源：{detail.image.source === 'docker' ? 'Docker 守护进程' : '手动监控'}</span>
+                <span>来源：{detail.image.source === 'docker' ? 'Docker 守护进程' : detail.image.source === 'default' ? '演示监控' : '手动监控'}</span>
                 <span>检测模式：{modeLabel(detail.image.effective_mode)}{detail.image.mode && detail.image.mode !== 'auto' ? `（手动覆写）` : '（自动）'}</span>
               </div>
               {/* 分隔列（divide-x），不包子卡片（规则 G：禁止嵌套卡片） */}

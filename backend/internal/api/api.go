@@ -473,6 +473,19 @@ func (a *api) handleSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// 关闭内置演示监控列表（false→true）：立即清理演示列表已产生的镜像行，
+		// 避免「功能已关闭但 nginx/redis/postgres 等演示镜像仍出现在列表中」；
+		// 之后扫描不再采集它们，重新开启后由下次扫描自动重建。
+		// 仅在该设置从关闭→打开这一跳变时执行，用户保持关闭状态保存其它设置
+		// 不会误删手动添加的同名引用。
+		if prev.DisableDefaultWatch == false && next.DisableDefaultWatch == true {
+			if n, err := a.store.DeleteDefaultWatchImages(a.scanner.DefaultWatchRefs()); err != nil {
+				log.Printf("cleanup default watch images after disable failed: %v", err)
+			} else if n > 0 {
+				log.Printf("removed %d default-watch image row(s) after disabling demo list", n)
+			}
+		}
+
 		// 注册表相关字段变更：热重建客户端并同步 scanner 与接口自身（原子替换，无锁竞争）
 		if prev.RegistryInsecure != next.RegistryInsecure || prev.RegistryMirror != next.RegistryMirror {
 			newReg := registry.NewClientWithMirror(next.RegistryInsecure, next.RegistryMirror)

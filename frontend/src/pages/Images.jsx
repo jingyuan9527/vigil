@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, fmtTime, fmtShort, modeLabel, shortDigest } from '../api/client'
+import { api, fmtTime, fmtShort, modeLabel, shortDigest, SCAN_DONE_EVENT } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import StatusBadge from '../components/StatusBadge'
 import Spinner from '../components/Spinner'
@@ -58,6 +58,13 @@ export default function Images() {
     load()
     // eslint-disable-next-line
   }, [filter])
+
+  // 顶栏「立即扫描」/ 通知页「全部重新扫描」结束后自动刷新列表数据
+  useEffect(() => {
+    const onScanDone = () => load()
+    window.addEventListener(SCAN_DONE_EVENT, onScanDone)
+    return () => window.removeEventListener(SCAN_DONE_EVENT, onScanDone)
+  }, [])
 
   // 筛选或搜索条件变化时回到第 1 页
   useEffect(() => {
@@ -260,8 +267,8 @@ export default function Images() {
                     )}
                   </div>
                   <div className="mt-0.5 flex items-center gap-1.5 whitespace-nowrap text-xs text-zinc-400">
-                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${img.source === 'docker' ? 'bg-blue-400' : 'bg-zinc-300 dark:bg-zinc-600'}`} />
-                    <span className="shrink-0">{img.source === 'docker' ? 'Docker' : '手动'}</span>
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${img.source === 'docker' ? 'bg-blue-400' : img.source === 'default' ? 'bg-amber-400' : 'bg-zinc-300 dark:bg-zinc-600'}`} />
+                    <span className="shrink-0">{img.source === 'docker' ? 'Docker' : img.source === 'default' ? '演示' : '手动'}</span>
                     <span className="shrink-0 text-zinc-300 dark:text-zinc-600">·</span>
                     {/* 相对/短时间防换行，完整时间见悬浮提示 */}
                     <span title={img.last_check ? fmtTime(img.last_check) : undefined}>
