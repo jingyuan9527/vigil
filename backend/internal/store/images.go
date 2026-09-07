@@ -212,22 +212,25 @@ func (s *Store) DeleteDefaultWatchImages(refs []string) (int64, error) {
 	return n, nil
 }
 
-// MarkDockerImagesMissing 将「source=docker 且当前本机已不再出现」的镜像行标记为 stale（缺失），
-// 用于清理本机已删除镜像在库内的残留。liveRefs 为本轮 Docker 仍存在的引用集合；
-// 仅更新未忽略的项，避免打扰用户手动忽略、但镜像其实已从本机移除的记录。
-// 返回受影响的行数。
-func (s *Store) MarkDockerImagesMissing(liveRefs map[string]bool) (int64, error) {
+// DeleteRemovedDockerImages 删除「source=docker 且当前本机已不再存在」的镜像行。
+// 镜像列表与版本对比以当前 Docker 守护进程的本地镜像为源：本机删除的镜像
+// 随下次扫描移除（含派生数据，见 deleteImageRow），而不是残留为 stale（缺失）
+// 标记——避免「docker rmi 之后镜像仍出现在列表中并显示缺失」。
+// 保护规则沿用旧标记实现：liveRefs 为空（守护进程异常/扫描不可用）不贸然清理；
+// manual / default / watch 来源与 ignored 项不受影响；通知行保留可查。
+// 返回删除的行数。
+func (s *Store) DeleteRemovedDockerImages(liveRefs map[string]bool) (int64, error) {
 	if len(liveRefs) == 0 {
 		// 无存活引用说明 Docker 扫描不可用或守护进程异常，不贸然清理。
 		return 0, nil
 	}
-	var marked int64
-	rows, err := s.db.Query(`SELECT id, reference FROM images WHERE source='docker'`)
+	var removed int64
+	rows, err := s.db.Query(`SELECT id, reference FROM images WHERE source='docker' AND ignored=0`)
 	if err != nil {
 		return 0, err
 	}
 	defer rows.Close()
-	var stale []int64
+	var gone []int64
 	for rows.Next() {
 		var id int64
 		var ref string
@@ -235,18 +238,17 @@ func (s *Store) MarkDockerImagesMissing(liveRefs map[string]bool) (int64, error)
 			return 0, err
 		}
 		if !liveRefs[ref] {
-			stale = append(stale, id)
+			gone = append(gone, id)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	for _, id := range stale {
-		if _, err := s.db.Exec(`UPDATE images SET status=? WHERE id=? AND ignored=0`,
-			string(models.StatusStale), id); err != nil {
+	for _, id := range gone {
+		if err := s.deleteImageRow(id); err != nil {
 			return 0, err
 		}
-		marked++
+		removed++
 	}
-	return marked, nil
+	return removed, nil
 }

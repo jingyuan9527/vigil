@@ -154,9 +154,9 @@ func TestIgnored(t *testing.T) {
 	}
 }
 
-// TestMarkDockerImagesMissing 验证本机已删除 docker 镜像被标记为 stale，
-// 而仍存活或 manual 来源的行不受影响。
-func TestMarkDockerImagesMissing(t *testing.T) {
+// TestDeleteRemovedDockerImages 验证本机已删除的 docker 镜像行被移除（而非标 stale），
+// 存活 docker 行、manual 行与 ignored 项不受影响，通知历史保留。
+func TestDeleteRemovedDockerImages(t *testing.T) {
 	s, err := Open(":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -174,40 +174,58 @@ func TestMarkDockerImagesMissing(t *testing.T) {
 	alive := seed("nginx:latest", "docker")
 	removed := seed("mysql:8", "docker")
 	manual := seed("redis:7", "manual")
+	_ = seed("postgres:13", "docker")
+	// 给被删镜像挂版本快照与通知，验证级联与保留
+	_ = s.AddVersion(removed.ID, "sha256:old", "8")
+	_ = s.CreateNotification(&models.Notification{ImageID: removed.ID,
+		ImageName: "mysql", Reference: "mysql:8", Type: models.NotifUpdate,
+		Message: "new version"})
 
-	n, err := s.MarkDockerImagesMissing(map[string]bool{"nginx:latest": true, "redis:7": true})
+	n, err := s.DeleteRemovedDockerImages(map[string]bool{"nginx:latest": true, "redis:7": true})
 	if err != nil {
-		t.Fatalf("mark: %v", err)
+		t.Fatalf("delete removed: %v", err)
 	}
-	if n != 1 {
-		t.Errorf("marked = %d, want 1", n)
+	if n != 2 {
+		t.Errorf("deleted = %d, want 2 (mysql:8, postgres:13)", n)
 	}
 
-	gotAlive, _ := s.GetImageByRef(alive.Reference)
-	if gotAlive.Status != models.StatusUpToDate {
-		t.Errorf("alive docker image status = %q, want up-to-date", gotAlive.Status)
+	if gotAlive, _ := s.GetImageByRef(alive.Reference); gotAlive == nil {
+		t.Error("alive docker image must not be deleted")
 	}
-	gotRemoved, _ := s.GetImageByRef(removed.Reference)
-	if gotRemoved.Status != models.StatusStale {
-		t.Errorf("removed docker image status = %q, want stale", gotRemoved.Status)
+	if gotRemoved, _ := s.GetImageByRef(removed.Reference); gotRemoved != nil {
+		t.Errorf("removed docker image still present: %+v", gotRemoved)
 	}
-	gotManual, _ := s.GetImageByRef(manual.Reference)
-	if gotManual.Status != models.StatusUpToDate {
-		t.Errorf("manual image must not be touched, status = %q", gotManual.Status)
+	if gotManual, _ := s.GetImageByRef(manual.Reference); gotManual == nil {
+		t.Error("manual image must not be deleted")
+	}
+	// 版本快照级联删除，通知行保留
+	if vers, _ := s.ListVersions(removed.ID); len(vers) != 0 {
+		t.Errorf("versions not cascaded, count = %d", len(vers))
+	}
+	if rows, _ := s.db.Query(`SELECT COUNT(*) FROM notifications WHERE image_id=?`, removed.ID); rows.Next() {
+		var c int
+		_ = rows.Scan(&c)
+		if c != 1 {
+			t.Errorf("notifications kept = %d, want 1", c)
+		}
+		rows.Close()
 	}
 
 	// 空 liveRefs（docker 不可用信号）应安全地不做任何改动
-	if err := s.UpsertImage(&models.Image{ID: gotRemoved.ID, Name: gotRemoved.Name,
-		Reference: gotRemoved.Reference, Source: "docker", Registry: gotRemoved.Registry,
-		Tag: gotRemoved.Tag, Status: models.StatusUpToDate, CreatedAt: gotRemoved.CreatedAt}); err != nil {
+	if err := s.UpsertImage(&models.Image{Name: "mysql", Reference: "mysql:8", Source: "docker",
+		Registry: "registry-1.docker.io", Tag: "8", Status: models.StatusUpToDate,
+		CreatedAt: time.Now()}); err != nil {
 		t.Fatalf("re-upsert removed: %v", err)
 	}
-	n2, err := s.MarkDockerImagesMissing(nil)
+	n2, err := s.DeleteRemovedDockerImages(nil)
 	if err != nil {
-		t.Fatalf("mark with empty: %v", err)
+		t.Fatalf("delete with empty: %v", err)
 	}
 	if n2 != 0 {
-		t.Errorf("marked with empty liveRefs = %d, want 0", n2)
+		t.Errorf("deleted with empty liveRefs = %d, want 0", n2)
+	}
+	if got, _ := s.GetImageByRef("mysql:8"); got == nil {
+		t.Error("empty liveRefs must not delete rows")
 	}
 }
 

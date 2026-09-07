@@ -499,8 +499,10 @@ func truncateErrs(errs []string, maxRunes int) string {
 	return string(r[:maxRunes]) + "…"
 }
 
-// pruneRemovedDockerImages 对本机已不存在的 docker 镜像做陈旧标记。
-// 仅当 Docker 守护进程可达时执行；manual / watch 来源不受影响。
+// pruneRemovedDockerImages 清理本机已不存在的 docker 镜像行：镜像列表与版本
+// 对比以当前 Docker 守护进程的本地镜像为源，本机删除的镜像随扫描移除，
+// 不再残留为「缺失」标记。仅当 Docker 守护进程可达时执行；
+// manual / watch / 演示列表来源与 ignored 项不受影响（见 store.DeleteRemovedDockerImages）。
 func (s *Scanner) pruneRemovedDockerImages(ctx context.Context) {
 	if s.docker == nil {
 		return
@@ -516,7 +518,7 @@ func (s *Scanner) pruneRemovedDockerImages(ctx context.Context) {
 	for ref := range live {
 		liveRefs[ref] = true
 	}
-	if n, err := s.store.MarkDockerImagesMissing(liveRefs); err == nil && n > 0 {
-		log.Printf("marked %d removed docker image(s) as stale", n)
+	if n, err := s.store.DeleteRemovedDockerImages(liveRefs); err == nil && n > 0 {
+		log.Printf("removed %d docker image row(s) no longer present locally", n)
 	}
 }

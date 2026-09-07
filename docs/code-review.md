@@ -36,9 +36,9 @@
 
 ## 已处理的附带项：本机已删除 docker 镜像的库内残留
 
-- **位置**：`backend/internal/scanner/scanner.go` 新增 `pruneRemovedDockerImages`；`backend/internal/store/store.go` 新增 `MarkDockerImagesMissing`。
-- **行为**：每轮扫描结束时（Docker 可达时），将 `source='docker'` 且本机已不存在的行标记为 `stale`（缺失）；**manual / watch 来源与 ignored 项不受影响**；Docker 不可用或存活引用为空时不贸然清理。
-- **单测**：`TestMarkDockerImagesMissing`（store）已补充，验证存活 docker / manual 不受影响、已删 docker 置 stale、空 liveRefs 安全无操作。
+- **位置**：`backend/internal/scanner/scanner.go` 的 `pruneRemovedDockerImages`；`backend/internal/store/images.go` 新增 `DeleteRemovedDockerImages`。
+- **行为**：镜像列表与版本对比以**当前 Docker 守护进程的本地镜像为源**。每轮扫描结束时（Docker 可达时），将 `source='docker'` 且本机已不存在的行**直接删除**（含派生数据，通知行保留），不再残留为 stale「缺失」标记——避免「docker rmi 删除镜像后仍出现在列表中并显示缺失」；**manual / watch / 演示列表来源与 ignored 项不受影响**；Docker 不可用或存活引用为空时不贸然清理。
+- **单测**：`TestDeleteRemovedDockerImages`（store）已补充，验证存活 docker / manual 不受影响、已删 docker 行移除且版本级联、通知保留、空 liveRefs 安全无操作。
 
 ## 已处理的附带项：Compare 页失效 id 卡加载态
 

@@ -56,7 +56,7 @@ store 包按域拆分，新增存储逻辑先找对应文件，没有就开新�
 ```
 backend/internal/store/
   store.go          连接、迁移（幂等 DDL）、通用工具（时间/NULL 处理）
-  images.go         镜像 CRUD、忽略/模式覆写、stale 标记
+  images.go         镜像 CRUD、忽略/模式覆写、本机已删 docker 镜像清理
   versions.go       版本时间线
   seentags.go       pin-watch 已见标签基线
   notifications.go  通知 CRUD、去重基线、自动已读、保留策略
