@@ -479,9 +479,9 @@ func (a *api) handleSettings(w http.ResponseWriter, r *http.Request) {
 		//   - 本次保存恰好关闭（旧值 true→false 跳变）；
 		//   - 旧版本/旧代码遗留的 disable=true（升级后再次保存同样生效）。
 		// 之后扫描不再采集它们（scan.collectJobs 已按 source 识别），
-		// 重新开启后由下次扫描自动重建。清理只命中演示形态的行
+		// 重新开启后由下次扫描自动重建。清理只命中演示清单内的行
 		// （source=default 或 legacy manual 纯远端 watch，见 store.DeleteDefaultWatchImages），
-		// 本地 docker 行、带本地摘要或私有 registry 的手动行不受影响。
+		// 本地 docker 行、带本地摘要的手动行、清单外引用不受影响。
 		if next.DisableDefaultWatch {
 			if n, err := a.store.DeleteDefaultWatchImages(a.scanner.DefaultWatchRefs()); err != nil {
 				log.Printf("cleanup default watch images after disable failed: %v", err)

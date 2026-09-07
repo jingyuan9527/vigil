@@ -9,10 +9,11 @@ import (
 
 // TestDeleteDefaultWatchImages 验证关闭演示监控列表时只清理演示形态的行：
 //   - source=default 的新演示行（scanner.collectJobs 现标记）→ 删除；
-//   - 旧版本遗留的 manual + 纯远端 watch 形态（source=manual、无本地摘要、
-//     无 registry 前缀）→ 删除（升级前的演示行正是这种外形）；
-//   - source=docker 的本地镜像行、带本地摘要或私有 registry 的手动行、
-//     不在演示清单中的 manual watch-only 行 → 保留；
+//   - 旧版本遗留的 manual 纯远端 watch 形态（source=manual、无本地摘要，
+//     registry 为 docker.io 默认值 registry-1.docker.io）→ 删除
+//     （升级前的演示行正是这种外形，registry 判定不再区分空值/docker.io）;
+//   - source=docker 的本地镜像行、带本地摘要的手动行、带私有 registry 前缀
+//     reference 的手动行（不在演示清单内）、清单外 manual watch-only 行 → 保留；
 //   - 派生数据（版本快照/已见标签/去重基线）级联删除，通知历史保留。
 func TestDeleteDefaultWatchImages(t *testing.T) {
 	s, err := Open(":memory:")
@@ -28,21 +29,22 @@ func TestDeleteDefaultWatchImages(t *testing.T) {
 			Status: models.StatusUpToDate, CreatedAt: time.Now(),
 		}
 	}
-	// 应删除：新演示行 + 旧版遗留演示行
+	// 应删除：新演示行 + 旧版遗留演示行（registry 为 docker.io 默认值）
 	if err := s.UpsertImage(mk("nginx:latest", "default", "", "")); err != nil {
 		t.Fatalf("upsert default demo: %v", err)
 	}
-	if err := s.UpsertImage(mk("redis:latest", "manual", "", "")); err != nil {
+	if err := s.UpsertImage(mk("redis:latest", "manual", "", "registry-1.docker.io")); err != nil {
 		t.Fatalf("upsert legacy demo: %v", err)
 	}
-	// 应保留：docker 本地行 / 手动带本地摘要 / 手动私有 registry / 清单外手动行
+	// 应保留：docker 本地行 / 手动带本地摘要 / 私有 registry（带前缀 reference）/
+	// 清单外手动行
 	if err := s.UpsertImage(mk("postgres:latest", "docker", "sha256:loc", "")); err != nil {
 		t.Fatalf("upsert docker: %v", err)
 	}
 	if err := s.UpsertImage(mk("node:lts", "manual", "sha256:userlocal", "")); err != nil {
 		t.Fatalf("upsert manual with local: %v", err)
 	}
-	if err := s.UpsertImage(mk("alpine:latest", "manual", "", "harbor.example.com")); err != nil {
+	if err := s.UpsertImage(mk("harbor.example.com/alpine:latest", "manual", "", "harbor.example.com")); err != nil {
 		t.Fatalf("upsert manual private reg: %v", err)
 	}
 	if err := s.UpsertImage(mk("busybox:latest", "manual", "", "")); err != nil {
@@ -81,7 +83,7 @@ func TestDeleteDefaultWatchImages(t *testing.T) {
 			t.Errorf("%s 应被删除，仍在库中", ref)
 		}
 	}
-	for _, ref := range []string{"postgres:latest", "node:lts", "alpine:latest", "busybox:latest"} {
+	for _, ref := range []string{"postgres:latest", "node:lts", "harbor.example.com/alpine:latest", "busybox:latest"} {
 		if got, _ := s.GetImageByRef(ref); got == nil {
 			t.Errorf("%s 应被保留，却已被删除", ref)
 		}

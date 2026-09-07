@@ -165,11 +165,14 @@ func (s *Store) ListImages(status string) ([]models.Image, error) {
 // 命中条件（同一行需满足）：
 //   - reference 属于演示清单 refs（由调用方传入当前 DefaultWatch）
 //   - source 为 "default"（演示列表新产生，见 scanner.collectJobs），
-//     或旧版本遗留的 manual 纯远端 watch 形态（source=manual 且无本地摘要、
-//     无 registry 前缀）——升级前演示行正是这种外形；
+//     或旧版本遗留的 manual 纯远端 watch 形态（source=manual 且无本地摘要）——
+//     升级前演示行正是这种外形。旧版演示行的 registry 为 docker.io 默认值
+//     （registry-1.docker.io），与空值等价，判定不区分（reference 已在
+//     演示清单内精确限定，私有 registry 前缀引用天然不在其中）。
 //
-// 本地 Docker 镜像行（source=docker）、带本地摘要或私有 registry 前缀的
-// 手动行不受影响。通知历史保留（与 DeleteImage 语义一致）。
+// 本地 Docker 镜像行（source=docker）、带本地摘要的手动行不受影响；
+// 与演示清单同引用的手动行视为演示镜像一并清理（关闭演示列表即移除该引用，
+// 重新开启或手动添加可恢复）。通知历史保留（与 DeleteImage 语义一致）。
 // 返回删除的行数。
 func (s *Store) DeleteDefaultWatchImages(refs []string) (int64, error) {
 	if len(refs) == 0 {
@@ -185,7 +188,7 @@ func (s *Store) DeleteDefaultWatchImages(refs []string) (int64, error) {
 	rows, err := s.db.Query(
 		`SELECT id FROM images
 		 WHERE reference IN (`+ph+`)
-		   AND (source = ? OR (source = 'manual' AND (local_digest IS NULL OR local_digest = '') AND (registry IS NULL OR registry = '')))`,
+		   AND (source = ? OR (source = 'manual' AND (local_digest IS NULL OR local_digest = '')))`,
 		args...)
 	if err != nil {
 		return 0, err
