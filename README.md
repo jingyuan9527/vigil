@@ -180,6 +180,7 @@ cd frontend && npm install && npm run dev
 | `DB_PATH` | `/data/monitor.db` | SQLite 数据库路径 |
 | `STATIC_DIR` | `./static` | 前端静态资源目录 |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker 守护进程地址（`unix://` / `tcp://`） |
+| `TZ` | `UTC` | 容器时区（如 `Asia/Shanghai`），影响扫描记录与通知中的时间显示 |
 | `SCAN_INTERVAL` | `3600` | 周期扫描间隔（秒）；设为 `0` 关闭周期扫描（仍可手动触发），最小 30 |
 | `REGISTRY_INSECURE` | `false` | 是否允许 `http` 注册表 |
 | `REGISTRY_MIRROR` | 空 | 注册表镜像主机（非空时所有 manifest/tag 请求改发该主机，用于私有仓库/加速） |

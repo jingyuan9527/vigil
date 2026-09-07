@@ -12,6 +12,7 @@ services:
     environment:
       - PORT=54321
       - DOCKER_HOST=unix:///var/run/docker.sock
+      - TZ=Asia/Shanghai                     # 容器时区
       # - ADMIN_USER=admin
       # - ADMIN_PASSWORD=your_password
       # - JWT_SECRET=your-secret-key

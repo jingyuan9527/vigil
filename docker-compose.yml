@@ -13,6 +13,7 @@ services:
     environment:
       - PORT=54321
       - DOCKER_HOST=unix:///var/run/docker.sock
+      - TZ=Asia/Shanghai                     # 容器时区
       - SCAN_INTERVAL=3600          # 周期扫描间隔（秒）
       - REGISTRY_INSECURE=false     # 是否允许 http 注册表
       # - REGISTRY_MIRROR=https://your-mirror.example.com  # 私有/加速镜像（非空时覆盖注册表主机）
