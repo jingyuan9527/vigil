@@ -473,12 +473,16 @@ func (a *api) handleSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 关闭内置演示监控列表（false→true）：立即清理演示列表已产生的镜像行，
-		// 避免「功能已关闭但 nginx/redis/postgres 等演示镜像仍出现在列表中」；
-		// 之后扫描不再采集它们，重新开启后由下次扫描自动重建。
-		// 仅在该设置从关闭→打开这一跳变时执行，用户保持关闭状态保存其它设置
-		// 不会误删手动添加的同名引用。
-		if prev.DisableDefaultWatch == false && next.DisableDefaultWatch == true {
+		// 关闭内置演示监控列表：只要保存后处于关闭状态就立即清理演示列表
+		// 已产生的镜像行，避免「功能已关闭但 nginx/redis/postgres 等演示镜像
+		// 仍出现在列表中」。覆盖两种情形：
+		//   - 本次保存恰好关闭（旧值 true→false 跳变）；
+		//   - 旧版本/旧代码遗留的 disable=true（升级后再次保存同样生效）。
+		// 之后扫描不再采集它们（scan.collectJobs 已按 source 识别），
+		// 重新开启后由下次扫描自动重建。清理只命中演示形态的行
+		// （source=default 或 legacy manual 纯远端 watch，见 store.DeleteDefaultWatchImages），
+		// 本地 docker 行、带本地摘要或私有 registry 的手动行不受影响。
+		if next.DisableDefaultWatch {
 			if n, err := a.store.DeleteDefaultWatchImages(a.scanner.DefaultWatchRefs()); err != nil {
 				log.Printf("cleanup default watch images after disable failed: %v", err)
 			} else if n > 0 {

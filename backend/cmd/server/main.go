@@ -68,6 +68,17 @@ func main() {
 		live.Apply(config.SettingsFromMap(m))
 	}
 
+	// 启动自愈：若生效设置是「关闭演示监控列表」，清理旧版本遗留的演示镜像行
+	// （source=manual 纯远端形态，见 store.DeleteDefaultWatchImages），
+	// 避免升级后不保存设置时 nginx/redis/postgres 等演示镜像仍出现在列表中。
+	if live.Snapshot().DisableDefaultWatch {
+		if n, err := st.DeleteDefaultWatchImages(cfg.DefaultWatch); err != nil {
+			log.Printf("startup cleanup of default-watch images failed: %v", err)
+		} else if n > 0 {
+			log.Printf("startup: removed %d leftover default-watch image row(s)", n)
+		}
+	}
+
 	// 注册表客户端以「生效设置」构造，确保页面修改后重启仍生效。
 	liveSnap := live.Snapshot()
 	reg := registry.NewClientWithMirror(liveSnap.RegistryInsecure, liveSnap.RegistryMirror)
