@@ -53,7 +53,7 @@ func TestDisableDefaultWatchRemovesDemoImages(t *testing.T) {
 	// 管理员初始化 + 取 token
 	tok := setupToken(t, srv.URL)
 
-	getImages := func() map[string][]models.Image {
+	getImages := func() map[string]models.Image {
 		req, _ := http.NewRequest("GET", srv.URL+"/api/images", nil)
 		req.Header.Set("Authorization", "Bearer "+tok)
 		resp, e := http.DefaultClient.Do(req)
