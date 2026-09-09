@@ -4,8 +4,13 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -48,5 +53,62 @@ func TestSignURLMatchesDingTalk(t *testing.T) {
 	// 二次解码会把 '+' 当空格吃掉（历史实现正栽在这里，且仅当签名恰含 '+' 时失败）。
 	if sign != expect {
 		t.Fatalf("sign mismatch: got %q want %q", sign, expect)
+	}
+}
+
+// captureDingTalk 起一个假 webhook 服务器，返回请求体中的 text 内容与清理函数。
+func captureDingTalk(t *testing.T) (url string, getText func() string, cleanup func()) {
+	t.Helper()
+	var mu sync.Mutex
+	var text string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var msg struct {
+			Markdown struct {
+				Text string `json:"text"`
+			} `json:"markdown"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+			t.Errorf("decode request body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		text = msg.Markdown.Text
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	return srv.URL,
+		func() string {
+			mu.Lock()
+			defer mu.Unlock()
+			return text
+		},
+		func() { srv.Close() }
+}
+
+// TestNotifyUpdateLatestTagLine 校验镜像更新提醒：latestTag 非空时附上
+// 「最新Tag」行，为空时不输出该行（老格式保持不变）。
+func TestNotifyUpdateLatestTagLine(t *testing.T) {
+	url, getText, cleanup := captureDingTalk(t)
+	defer cleanup()
+
+	if err := NotifyUpdate(url, "", "ghcr.io/jingyuan9527/stellar:latest",
+		"4611266078ea", "45f6f511ca", "v1.4.1"); err != nil {
+		t.Fatalf("NotifyUpdate with tag: %v", err)
+	}
+	got := getText()
+	for _, want := range []string{"**镜像**: ghcr.io/jingyuan9527/stellar:latest",
+		"**最新Tag**: `v1.4.1`", "**旧摘要**: `4611266078ea`", "**新摘要**: `45f6f511ca`"} {
+		if strings.Count(got, want) == 0 {
+			t.Errorf("content missing %q:\n%s", want, got)
+		}
+	}
+
+	if err := NotifyUpdate(url, "", "nginx:latest", "old", "new", ""); err != nil {
+		t.Fatalf("NotifyUpdate without tag: %v", err)
+	}
+	got = getText()
+	if strings.Contains(got, "最新Tag") {
+		t.Errorf("content should not contain 最新Tag when latestTag empty:\n%s", got)
 	}
 }

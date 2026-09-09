@@ -42,6 +42,27 @@ func TestParseTag(t *testing.T) {
 	}
 }
 
+func TestLatestTag(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want string
+	}{
+		{"版本+浮动混合取最高版本", []string{"latest", "v1.2.0", "1.2.1", "v1.4.1", "dev"}, "v1.4.1"},
+		{"v 前缀与无前缀同版本保留先见者", []string{"v1.4.1", "1.4.1"}, "v1.4.1"},
+		{"非版本 tag 全被忽略", []string{"latest", "lts", "edge", "dev"}, ""},
+		{"大版本号高于细分版本", []string{"8.4.5", "26", "v3.9"}, "26"},
+		{"带后缀只比数字主体", []string{"1.2.3-alpine", "1.10"}, "1.10"},
+		{"空列表", nil, ""},
+		{"无 v 前缀版本原样返回", []string{"latest", "8.4.7"}, "8.4.7"},
+	}
+	for _, c := range cases {
+		if got := LatestTag(c.in); got != c.want {
+			t.Errorf("%s: LatestTag(%v) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}
+
 func TestCompare(t *testing.T) {
 	cases := []struct {
 		a, b string

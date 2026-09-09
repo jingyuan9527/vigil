@@ -47,6 +47,24 @@ func ParseTag(tag string) (nums, bool) {
 	return out, true
 }
 
+// LatestTag 返回 tags 中数字版本号最高的 tag（原样返回，如 "v1.4.1"）；
+// 没有可解析为数字版本的 tag（如 latest/lts/edge）时返回空串。
+// 缺失段按 0 处理，因此 "1.4" 与 "1.4.0" 等价，比较规则同 Compare。
+func LatestTag(tags []string) string {
+	best := ""
+	var bestNums nums
+	for _, t := range tags {
+		n, ok := ParseTag(t)
+		if !ok {
+			continue
+		}
+		if best == "" || Compare(n, bestNums) > 0 {
+			best, bestNums = t, n
+		}
+	}
+	return best
+}
+
 // Compare 按段比较两个版本序列：a<b 返回 -1，相等返回 0，a>b 返回 1。
 // 缺失的段按 0 处理（8.4 等价 8.4.0），因此 8.4 < 8.4.5、26 > 8.4.5。
 func Compare(a, b nums) int {

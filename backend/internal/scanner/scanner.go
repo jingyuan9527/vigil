@@ -45,14 +45,15 @@ func (s *Scanner) registry() *registry.Client { return s.reg.Load() }
 func (s *Scanner) DefaultWatchRefs() []string { return s.cfg.DefaultWatch }
 
 // notifyUpdate 异步推送「有新版本」钉钉通知；未配置 webhook 时静默跳过。
+// latestTag 是仓库远端版本号最高的 tag（尽力而为，取不到传空串）。
 // 站内通知已同步落库，钉钉失败只记日志、不回滚。
-func (s *Scanner) notifyUpdate(ref, oldDigest, newDigest string) {
+func (s *Scanner) notifyUpdate(ref, oldDigest, newDigest, latestTag string) {
 	snap := s.settings.Snapshot()
 	if snap.DingTalkWebhook == "" {
 		return
 	}
 	go func(webhook, secret string) {
-		if err := notification.NotifyUpdate(webhook, secret, ref, oldDigest, newDigest); err != nil {
+		if err := notification.NotifyUpdate(webhook, secret, ref, oldDigest, newDigest, latestTag); err != nil {
 			log.Printf("dingtalk notify failed for %s: %v", ref, err)
 		}
 	}(snap.DingTalkWebhook, snap.DingTalkSecret)
@@ -236,6 +237,9 @@ func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) 
 		// 用户是否已读，只要存在版本差异就再次通知（系统 + 钉钉）。
 		if shouldNotify && (!notified || force) {
 			old := baseline
+			// 尽力查出仓库远端版本号最高的 tag（如 v1.4.1）附在提醒里，方便一眼看到新版本号；
+			// tags/list 不可用或仓库无版本 tag 时为空，提醒内容跳过该行，不影响通知本身。
+			latestTag := s.latestRemoteVersionTag(ctx, ref)
 			msg := fmt.Sprintf("镜像 %s 检测到新版本（远端摘要已变更）", j.reference)
 			_ = s.store.CreateNotification(&models.Notification{
 				ImageID:   img.ID,
@@ -248,7 +252,7 @@ func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) 
 				Type:      models.NotifUpdate,
 				Message:   msg,
 			})
-			s.notifyUpdate(j.reference, old, remote)
+			s.notifyUpdate(j.reference, old, remote, latestTag)
 			found = true
 		}
 	}
@@ -371,6 +375,19 @@ func latestNewerVersionTag(tags []string, pinned string) string {
 		}
 	}
 	return best
+}
+
+// latestRemoteVersionTag 尽力返回仓库远端版本号最高的 tag（如 v1.4.1）。
+// 仅在需要发出 update 通知时调用：tags/list 请求带上 5s 超时兜底，
+// 失败或仓库没有可解析的版本 tag 时返回空串（提醒不附 tag 行，不影响通知）。
+func (s *Scanner) latestRemoteVersionTag(ctx context.Context, ref registry.ImageRef) string {
+	tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	tags, err := s.registry().ListTags(tctx, ref)
+	if err != nil || len(tags) == 0 {
+		return ""
+	}
+	return version.LatestTag(tags)
 }
 
 // computeStatus 依据本地摘要、远端摘要与上次远端摘要，判定镜像状态。

@@ -78,17 +78,23 @@ func SendDingTalk(webhookURL, secret, title, content string) error {
 	return nil
 }
 
-// NotifyUpdate 发送镜像更新通知到钉钉。secret 非空时自动加签。
-func NotifyUpdate(webhookURL, secret, imageRef, oldDigest, newDigest string) error {
+// NotifyUpdate 发送镜像更新通知到钉钉。latestTag 为仓库远端版本号最高的 tag
+// （如 v1.4.1），非空时附在提醒中；secret 非空时自动加签。
+func NotifyUpdate(webhookURL, secret, imageRef, oldDigest, newDigest, latestTag string) error {
 	title := "Vigil 镜像更新通知"
+	now := time.Now().Format("2006-01-02 15:04:05")
+	tagLine := ""
+	if latestTag != "" {
+		tagLine = fmt.Sprintf("**最新Tag**: `%s`\n\n", latestTag)
+	}
 	content := fmt.Sprintf(
 		"### 🔔 镜像更新提醒\n\n"+
 			"**镜像**: %s\n\n"+
+			"%s"+
 			"**旧摘要**: `%s`\n\n"+
 			"**新摘要**: `%s`\n\n"+
 			"**时间**: %s\n",
-		imageRef, oldDigest, newDigest,
-		time.Now().Format("2006-01-02 15:04:05"),
+		imageRef, tagLine, oldDigest, newDigest, now,
 	)
 	return SendDingTalk(webhookURL, secret, title, content)
 }
