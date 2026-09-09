@@ -18,7 +18,7 @@ services:
       - REGISTRY_INSECURE=false     # 是否允许 http 注册表
       # - REGISTRY_MIRROR=https://your-mirror.example.com  # 私有/加速镜像（非空时覆盖注册表主机）
       # - WATCH=nginx:latest,redis:7,postgres:16   # 额外监控（无本地镜像也可监控远端）
-      # - DISABLE_DEFAULT_WATCH=false               # 设为 1 关闭内置演示监控列表
+      # - DISABLE_DEFAULT_WATCH=true                # 内置演示监控列表默认关闭；设为 0/false 可启用演示数据
       # - ADMIN_USER=admin                          # 管理员用户名（首次部署时自动创建）
       # - ADMIN_PASSWORD=your_password               # 管理员密码（首次部署时自动创建，至少 6 位）
       # - JWT_SECRET=your-secret-key                 # JWT 密钥（不设置则自动生成并持久化）

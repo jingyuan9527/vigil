@@ -79,4 +79,8 @@ func TestSettingsFromMapLegacy(t *testing.T) {
 	if s.ScanMode != ScanModeInterval || s.ScanInterval != 3600 || s.ScanDailyTime != "" {
 		t.Errorf("legacy map default wrong: %+v", s)
 	}
+	// disable_default_watch 缺省应为 true：演示列表默认关闭（与部署默认一致）
+	if !s.DisableDefaultWatch {
+		t.Error("legacy map without disable_default_watch should default to true (demo off)")
+	}
 }

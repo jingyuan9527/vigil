@@ -59,7 +59,7 @@ func Load() *Config {
 		ScanInterval:     time.Duration(getEnvInt("SCAN_INTERVAL", 3600)) * time.Second,
 		RegistryInsecure: getEnvBool("REGISTRY_INSECURE", false),
 		RegistryMirror:   getEnv("REGISTRY_MIRROR", ""),
-		DisableDefault:   getEnvBool("DISABLE_DEFAULT_WATCH", false),
+		DisableDefault:   getEnvBool("DISABLE_DEFAULT_WATCH", true),
 		AdminUser:        getEnv("ADMIN_USER", ""),
 		AdminPassword:    getEnv("ADMIN_PASSWORD", ""),
 		JWTSecret:        getEnv("JWT_SECRET", ""),
@@ -74,8 +74,10 @@ func Load() *Config {
 			}
 		}
 	}
-	// 内置一组常用镜像作为演示 watch 列表，使开箱即有数据；
-	// 设置 DISABLE_DEFAULT_WATCH=1 或提供 WATCH 可覆盖。
+	// 内置一组常用镜像作为演示 watch 列表（演示模式）。
+	// 默认关闭演示模式（DISABLE_DEFAULT_WATCH 缺省为 true）：新部署不带演示数据，
+	// 只有显式设 DISABLE_DEFAULT_WATCH=0/false 或在页面「设置」中开启
+	// 「演示监控列表」时才启用演示数据。
 	c.DefaultWatch = []string{
 		"nginx:latest",
 		"redis:latest",

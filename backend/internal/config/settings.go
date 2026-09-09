@@ -154,10 +154,11 @@ func SettingsToMap(s Settings) map[string]string {
 	}
 }
 
-// SettingsFromMap 从库中的 key/value 还原设置（缺字段时使用零值）。
+// SettingsFromMap 从库中的 key/value 还原设置（缺字段时使用零值；例外：
+// disable_default_watch 缺省视为 true，与部署默认一致——演示列表默认关闭）。
 // scan_mode 缺省为 interval，保证旧库（无该键）平滑升级。
 func SettingsFromMap(m map[string]string) Settings {
-	s := Settings{ScanMode: ScanModeInterval}
+	s := Settings{ScanMode: ScanModeInterval, DisableDefaultWatch: true}
 	if v, ok := m["scan_interval"]; ok {
 		if n, err := strconv.Atoi(v); err == nil {
 			s.ScanInterval = n

@@ -75,7 +75,7 @@ docker compose -f docker-compose.ghcr.yml up -d
 
 - 首次使用会引导**初始化管理员账号**；也可用 `ADMIN_USER` / `ADMIN_PASSWORD` 环境变量免交互创建。
 - 挂载 `docker.sock` 后会自动监控本机所有带 tag 的镜像；未挂载（或无 Docker 守护进程）时也可通过 `WATCH` 变量或页面「添加监控」监视任意注册表镜像。
-- 内置一组演示监控列表（nginx / redis / postgres 等），开箱即有数据；不需要可在设置页或用 `DISABLE_DEFAULT_WATCH=1` 关闭。
+- 内置演示监控列表（nginx / redis / postgres 等）**默认关闭**，部署后即是纯净环境；需要演示数据可在设置页开启，或用 `DISABLE_DEFAULT_WATCH=0` 启用。
 
 ### 方式二：源码构建
 
@@ -185,7 +185,7 @@ cd frontend && npm install && npm run dev
 | `REGISTRY_INSECURE` | `false` | 是否允许 `http` 注册表 |
 | `REGISTRY_MIRROR` | 空 | 注册表镜像主机（非空时所有 manifest/tag 请求改发该主机，用于私有仓库/加速） |
 | `WATCH` | 空 | 额外监控的镜像引用，逗号分隔（如 `nginx:latest,redis:7`） |
-| `DISABLE_DEFAULT_WATCH` | `false` | 设为 `1` 关闭内置演示监控列表 |
+| `DISABLE_DEFAULT_WATCH` | `true` | 内置演示监控列表（nginx / redis / postgres 等）默认关闭；设为 `0`（或 `false`）启用演示数据 |
 | `ADMIN_USER` / `ADMIN_PASSWORD` | 空 | 首次部署自动创建管理员（两者需同时设置，密码至少 6 位） |
 | `JWT_SECRET` | 空 | JWT 签名密钥；不设置则自动生成并持久化到数据库 |
 | `DINGTALK_WEBHOOK` | 空 | 钉钉机器人 Webhook，配置后更新自动推送钉钉 |
