@@ -47,6 +47,81 @@ function humanInterval(sec) {
   return `${s.v} ${u.label}`
 }
 
+// —— 每天定时时刻选择：自定义「时 : 分」两个下拉，替代原生 <input type="time">。
+//    原生时间输入弹层在录屏/截图中不显示且外观不可定制，这里改为完全可录制的
+//    原生下拉（小时按时段分组），样式与整体 Bento 风格保持一致。 ——
+const HOUR_GROUPS = [
+  { label: '凌晨', start: 0, end: 5 },
+  { label: '早晨', start: 6, end: 11 },
+  { label: '下午', start: 12, end: 17 },
+  { label: '晚上', start: 18, end: 23 },
+]
+
+const pad2 = (n) => String(n).padStart(2, '0')
+
+// 解析 "HH:MM"（容忍 "H:MM" 单数字小时）；非法返回 null
+function parseDailyTime(s) {
+  const m = /^(\d{1,2}):(\d{1,2})$/.exec(s || '')
+  if (!m) return null
+  const h = Number(m[1])
+  const min = Number(m[2])
+  if (h < 0 || h > 23 || min < 0 || min > 59) return null
+  return { hour: h, minute: min }
+}
+
+// 时刻选择器：小时（按时段分组）+ 分钟两个下拉，onChange 输出规范化的 HH:MM
+function TimeSelect({ value, onChange }) {
+  const t = parseDailyTime(value) || { hour: 0, minute: 0 }
+  const pick = (part, v) =>
+    onChange(`${pad2(part === 'hour' ? v : t.hour)}:${pad2(part === 'minute' ? v : t.minute)}`)
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-3">
+      <div className="inline-flex items-center gap-0.5 rounded-xl border border-zinc-200 bg-zinc-50 py-1.5 pl-2.5 pr-1.5 dark:border-zinc-700 dark:bg-zinc-800">
+        {/* 时钟图标 */}
+        <svg
+          className="mr-0.5 h-4 w-4 shrink-0 text-zinc-400 dark:text-zinc-500"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7v5l3 2" />
+        </svg>
+        <select
+          aria-label="小时"
+          value={t.hour}
+          onChange={(e) => pick('hour', Number(e.target.value))}
+          className="w-14 cursor-pointer bg-transparent py-1 text-center text-sm font-medium text-zinc-900 outline-none dark:text-zinc-100"
+        >
+          {HOUR_GROUPS.map((g) => (
+            <optgroup key={g.label} label={g.label}>
+              {Array.from({ length: g.end - g.start + 1 }, (_, i) => g.start + i).map((h) => (
+                <option key={h} value={h}>{pad2(h)}</option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+        <span className="select-none pb-0.5 text-sm font-semibold text-zinc-400 dark:text-zinc-500">:</span>
+        <select
+          aria-label="分钟"
+          value={t.minute}
+          onChange={(e) => pick('minute', Number(e.target.value))}
+          className="w-14 cursor-pointer bg-transparent py-1 text-center text-sm font-medium text-zinc-900 outline-none dark:text-zinc-100"
+        >
+          {Array.from({ length: 60 }, (_, i) => (
+            <option key={i} value={i}>{pad2(i)}</option>
+          ))}
+        </select>
+      </div>
+      <span className="text-xs text-zinc-400 dark:text-zinc-500">每天在该时刻扫描一次（服务器本地时区）</span>
+    </div>
+  )
+}
+
 export default function Settings() {
   const [form, setForm] = useState(null)
   const [saved, setSaved] = useState(null) // 最近一次保存的基线，用于「未保存更改」提示
@@ -154,7 +229,17 @@ export default function Settings() {
                   type="button"
                   role="tab"
                   aria-selected={(form.scan_mode || 'interval') === m.key}
-                  onClick={() => update({ scan_mode: m.key })}
+                  onClick={() =>
+                    update({
+                      scan_mode: m.key,
+                      // 切入定时模式时确保时刻合法：旧值缺失/非法时落到 00:00，
+                      // 避免保存后 daily 扫描因时刻非法被挂起
+                      scan_daily_time:
+                        m.key === 'daily' && !parseDailyTime(form.scan_daily_time)
+                          ? '00:00'
+                          : form.scan_daily_time,
+                    })
+                  }
                   className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
                     (form.scan_mode || 'interval') === m.key
                       ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-zinc-100'
@@ -168,15 +253,7 @@ export default function Settings() {
           </div>
 
           {(form.scan_mode || 'interval') === 'daily' ? (
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <input
-                type="time"
-                value={form.scan_daily_time || ''}
-                onChange={(e) => update({ scan_daily_time: e.target.value })}
-                className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-              />
-              <span className="text-xs text-zinc-400 dark:text-zinc-500">每天在该时刻扫描一次（服务器本地时区）</span>
-            </div>
+            <TimeSelect value={form.scan_daily_time} onChange={(v) => update({ scan_daily_time: v })} />
           ) : (
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <input
