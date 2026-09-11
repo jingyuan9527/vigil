@@ -154,7 +154,10 @@
 - 必含类串见 2.0；占位 `placeholder-zinc-400`；错误态 `border-rose-400` + 下方 `text-rose-500 text-sm`；数字输入 `text-right tabular-nums`。
 
 ### 2.3 开关 Switch
-- `h-6 w-11 rounded-full`，开 `bg-blue-600`/关 `bg-zinc-300`（深 `bg-zinc-700`）；滑块 `h-5 w-5 translate-x-5/translate-x-0.5`；`role="switch" aria-checked`；标签左、开关右基线对齐。
+- 全局唯一实现 `components/Switch.jsx`（禁止再写第二套内联开关）；两档尺寸：`md`=`h-6 w-11`+滑块 `h-5 w-5`（设置卡），`sm`=`h-5 w-9`+滑块 `h-4 w-4`（渠道行等密集行）。
+- 开 `bg-blue-600`/关 `bg-zinc-300`（深 `bg-zinc-700`）；位移 `translate-x-5/translate-x-0.5`（sm 为 `translate-x-[18px]`）；`role="switch"` + `aria-checked` + 必填 `aria-label`（由调用方给出，如「启用/停用 XX 渠道」）。
+- **开关必须有可见文案**，禁止裸开关（设置卡「左文右开关」、渠道行「已启用/已停用 + 开关」）。
+- 触控目标：用伪元素 `after:-inset-3` 向四周扩展命中区，保证视觉小控件在移动端仍 ≥44px。
 
 ### 2.4 徽章 / 状态徽章 StatusBadge
 - 输入 `status` key，按 §1.1.4 输出「圆点 + 文案」胶囊（`rounded-xl px-2.5 py-1 text-caption`）。
@@ -186,6 +189,13 @@
 
 ### 2.12 来源标识 SourceTag / 标签组
 - `source==='docker'` → 蓝点 +「Docker」；`watch`/`manual` → 灰点 +「手动」；`ignored` 标记 `bg-zinc-200 text-zinc-500`（深 `bg-zinc-700 text-zinc-400`）`rounded-md px-1.5 py-0.5 text-caption`。
+
+### 2.13 表单抽屉 Drawer（`components/Drawer.jsx`）
+- 用途：**新增 / 编辑类表单**不得再用「表单整块替换列表」的方式（丢失上下文），统一改为抽屉承载，列表保持可见。
+- 断点形态：桌面（`≥lg`）右侧滑出固定宽 `lg:w-[30rem]`、占满高度、`lg:rounded-l-2xl`；移动为底部抽屉 `rounded-t-2xl` + `max-h-[90dvh]`，内容区内滚、页脚常驻。
+- 结构：`header`（标题 + 说明 + 44px 关闭钮）/ 可滚动 `body` / `footer`（取消 + 主行动，移动端按钮 `h-11` 且可满宽）。
+- 语义与安全区：`role="dialog" aria-modal="true"`、`Esc` 关闭、遮罩点击关闭、打开时锁 `body` 滚动、页脚加 `pb-[calc(1rem+env(safe-area-inset-bottom))]`。
+- 动效：`drawer-overlay-in` / `drawer-in`（移动上滑、桌面右滑），`prefers-reduced-motion` 下关闭。
 
 ---
 
@@ -342,13 +352,32 @@ nginx:latest            [有更新]
 - **移动**：概览卡堆叠整行；行 `flex-wrap`；按钮满宽。
 
 ### 5.6 设置 `/settings`
-- **目标**：配置运行参数与告警，保存即生效。
-- **布局**：页头 + 表单 Bento：扫描计划(wide) / 演示列表(开关) / HTTP 注册表(开关) / 注册表镜像(wide,文本) / 钉钉(wide,Webhook+加签密钥+测试连接)。底部操作（保存 / 立即扫描）。
-- **扫描计划卡**：标题右侧两态分段按钮「间隔扫描 / 每天定时」（`role=tablist`，选中态白底/深色反转）。间隔模式=数字输入+单位下拉（秒/分钟/小时/天，落库为秒，换单位保持真实秒数、就近取整），副文案实时摘要（如「每 1 天 自动扫描一次」，0=已关闭）；定时模式=`type=time` 输入（HH:MM，服务器本地时区）。两种模式互斥切换，保存后由后端调度生效。
-- **交互（强制一致性规则 K）**：开关与扫描计划仅写本地 `form`，「保存设置」才 `PUT /settings` 落地；钉钉「测试连接」`testDingTalk`→Toast，空 Webhook 禁用；保存 feedback 条 success/error。
+- **目标**：配置运行参数与告警；区分「显式保存」与「即时生效」两类改动，避免用户误判。
+- **布局（分区信息架构）**：页头 + 三个区块，各区块由 `SectionHead`（标题 + 一行说明）起头：
+  1. **扫描**：扫描计划(wide) + 演示监控列表(wide 开关)。
+  2. **注册表**：HTTP 注册表(wide 开关) + 注册表镜像主机(wide 文本)。
+  3. **通知渠道**：多渠道管理模块（详见下方 §5.7），**改动即时生效**。
+  页脚为**粘性保存栏**（`sticky bottom-0`），常驻可见。
+- **扫描计划卡**：标题右侧两态分段按钮「间隔扫描 / 每天定时」（`role=tablist`，选中态白底/深色反转）。间隔模式=数字输入+单位下拉（秒/分钟/小时/天，落库为秒，换单位保持真实秒数、就近取整），副文案实时摘要（如「每 1 天 自动扫描一次」，0=已关闭）；定时模式=「时:分」自定义下拉（HH:MM，服务器本地时区）。两种模式互斥切换，保存后由后端调度生效。
+- **交互（强制一致性规则 K）**：扫描 / 演示 / 注册表仅写本地 `form`，**「保存设置」才 `PUT /settings` 落地**；通知渠道例外，随渠道抽屉保存即时生效——因此区块说明中必须显式告知，避免与底部保存栏混淆。
+- **反馈与校验（可预期）**：
+  - 卡片级「已修改」标记：该卡涉及字段与最近一次保存基线不一致时，标题旁出现 `已修改` 胶囊并加 `ring-2 ring-amber-500/30`。
+  - 字段级错误：扫描间隔 <30 秒且非 0、注册表镜像主机格式非法时，错误下沉到对应输入框下方（`border-rose-400` + 文案），并在保存时 Toast 汇总提示。
+  - 保存成功 / 失败走全局 Toast（`success` / `error`）。
+  - 有未保存改动时 `beforeunload` 兜底拦截离开；粘性栏提供「放弃更改」回滚到基线。
+- **粘性保存栏**：`保存设置`(primary，`disabled` 当非 dirty 或保存中) + `放弃更改`(secondary，仅 dirty 时出现) + 右侧状态文案（`有未保存的更改` amber / `所有更改已保存` 弱化）。
 - **状态**：加载→全页 Spinner；加载失败→ErrorState(重试)；保存中按钮 loading。
-- **[API]**：`settings()`→`{scan_interval,scan_mode,scan_daily_time,disable_default_watch,registry_insecure,registry_mirror,dingtalk_webhook,dingtalk_secret}`；`saveSettings`;`testDingTalk`;`scanNow`。
-- **移动**：单列；扫描计划卡模式按钮可换行；开关卡「左文右开关」不换行；输入全宽；按钮满宽。
+- **[API]**：`settings()`→`{scan_interval,scan_mode,scan_daily_time,disable_default_watch,registry_insecure,registry_mirror}`；`saveSettings`；`scanNow`。
+- **移动**：单列；扫描计划卡模式按钮与间隔行可换行；开关卡「左文右开关」不换行；输入全宽；粘性保存栏按钮可满宽、高度 `h-11`。
+
+### 5.7 通知渠道管理（`components/ChannelManager.jsx`）
+- **目标**：展示 / 新增 / 编辑 / 删除 / 启停通知渠道，并提供连通性测试；多渠道（钉钉 / 企业微信 / 飞书 / Telegram / 通用 Webhook）并行推送。
+- **列表**：Bento 卡内用**轻量行**（`divide-y`，禁嵌套卡片）。每行两段：① 类型徽章 + 名称 + 配置摘要（仅主机名/chat，**绝不回显 token/secret**）+ 右侧「已启用/已停用」文案与 `Switch`；② 操作区：`编辑`(主) / `测试连接`(次) / `删除`(danger，`ml-auto` 右移隔离，降低误触)。
+- **表单**：新增 / 编辑统一走 `Drawer`（§2.13），列表保持可见。字段按渠道类型动态渲染，类型创建后不可更改（切换类型会重置字段，避免残留不适用配置）。
+- **字段级校验**：必填项即时提示；URL 字段校验 `http(s)://` 与协议；通用 Webhook 的 `headers` 校验为 JSON 对象。校验失败**就地**显示在字段下方并聚焦首个出错字段，不依赖顶部提示条。
+- **反馈**：保存 / 删除 / 启停 / 测试结果一律走全局 Toast；行内操作按钮在飞行中显示 `测试中…` 等文案并禁用，避免重复提交。
+- **危险操作**：删除走 `ConfirmDialog`（规则 J）。
+- **[API]**：`channels()`→`{channels:[{id,kind,name,enabled,config}],kinds:[]}`；`createChannel` / `updateChannel` / `deleteChannel` / `testChannel(id)`。
 
 ---
 
@@ -367,7 +396,8 @@ nginx:latest            [有更新]
 | H | 导航项固定 5 项（§3.2） |
 | I | <lg 底部 Tab 栏（§4.1） |
 | J | 危险操作二次确认（ConfirmDialog） |
-| K | 设置改动显式保存 |
+| K | 设置改动显式保存（通知渠道例外，随抽屉保存即时生效，须在区块说明中标明） |
+| L | 新增/编辑表单走 Drawer（§2.13），禁止整块替换列表；字段校验错误就地下沉 |
 
 ### 6.2 风格引用自检清单（交付前逐条确认）
 - [ ] 按钮含 `px-4 py-2 md:px-6 md:py-3 rounded-xl font-medium transition-colors`
@@ -401,7 +431,7 @@ nginx:latest            [有更新]
 frontend/src/
   styles/tokens.css        # §1 变量 + 基础类（沿用 index.css，补充变量与 gap 禁令）
   components/  Button Input Switch Badge(StatusBadge) Card(BentoCard) StatCard
-               Pagination Spinner EmptyState ConfirmDialog Toast SourceTag BottomTabBar
+               Pagination Spinner EmptyState ConfirmDialog Drawer Toast SourceTag BottomTabBar
   context/  ThemeContext AuthContext (保留)
   pages/  (6 页按 §5 重构)
   api/client.js (保留)
@@ -436,6 +466,9 @@ frontend/src/
 - [ ] 移动端 <lg 底部 Tab 栏 + `pb-24` + 触控 ≥44px；无横向溢出。
 - [ ] Bento 网格 4→2→1，混合尺寸，无全等卡。
 - [ ] `prefers-reduced-motion` 动效降级。
+- [ ] 新增/编辑表单走 Drawer，未整块替换列表；校验错误就地展示并聚焦首错字段。
+- [ ] 开关均有可见文案与 `aria-label`；移动端控件命中区 ≥44px。
+- [ ] 设置页「显式保存」与「即时生效」两类改动在界面上有明确区分与提示。
 
 ---
 *文档结束 ｜ 本规范为 DockMon 前端视觉与交互的唯一事实来源（single source of truth），融合 Bento Grid 官方风格引用 v1.1，后续迭代须据此评审。*

@@ -102,6 +102,39 @@ body {
   }
 }
 
+/* ---------- 抽屉入场（Drawer）----------
+   移动端从底部上滑，桌面端右侧滑入；用同一类名 + 媒体查询切换关键帧，
+   避免依赖 Tailwind 响应式变体（自定义类无法加 lg: 前缀）。 */
+@keyframes drawer-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes drawer-sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes drawer-panel-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+.drawer-overlay-in {
+  animation: drawer-overlay-in 0.18s ease-out;
+}
+.drawer-in {
+  animation: drawer-sheet-up 0.24s ease-out;
+}
+@media (min-width: 1024px) {
+  .drawer-in {
+    animation-name: drawer-panel-in;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .drawer-overlay-in,
+  .drawer-in {
+    animation: none !important;
+  }
+}
+
 /* 滚动条细化 */
 ::-webkit-scrollbar {
   width: 10px;
