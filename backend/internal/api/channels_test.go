@@ -177,7 +177,7 @@ func TestChannelsCRUDAndTest(t *testing.T) {
 	if code, _ := doReq(t, "DELETE", base+"/"+itoa(created.ID), tok, nil); code != http.StatusNotFound {
 		t.Errorf("delete missing status = %d, want 404", code)
 	}
-	code, _ = doReq(t, "PUT", base+"/"+itoa(created.ID), tok, map[string]interface{}{"name": "x"}); 
+	code, _ = doReq(t, "PUT", base+"/"+itoa(created.ID), tok, map[string]interface{}{"name": "x"})
 	if code != http.StatusNotFound {
 		t.Errorf("update missing status = %d, want 404", code)
 	}
