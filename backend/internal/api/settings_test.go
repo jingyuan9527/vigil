@@ -26,7 +26,7 @@ func TestDisableDefaultWatchRemovesDemoImages(t *testing.T) {
 	}
 	demo := []string{"nginx:latest", "redis:latest", "postgres:latest", "node:lts", "alpine:latest"}
 	cfg := &config.Config{DefaultWatch: demo}
-	live := config.NewLiveSettings(3600, false, "", false, "", "")
+	live := config.NewLiveSettings(3600, false, "", false)
 	sc := scanner.New(cfg, st, nil, registry.NewClient(false), live)
 	router := NewRouter("./static", st, sc, registry.NewClient(false), live, []byte("test-secret"))
 	srv := httptest.NewServer(router)
@@ -65,7 +65,7 @@ func TestDisableDefaultWatchRemovesDemoImages(t *testing.T) {
 
 	// 开启「关闭演示监控列表」
 	putDisable := func() int {
-		body := `{"scan_interval":3600,"scan_mode":"interval","scan_daily_time":"","registry_insecure":false,"registry_mirror":"","disable_default_watch":true,"dingtalk_webhook":"","dingtalk_secret":""}`
+		body := `{"scan_interval":3600,"scan_mode":"interval","scan_daily_time":"","registry_insecure":false,"registry_mirror":"","disable_default_watch":true}`
 		req, _ := http.NewRequest("PUT", srv.URL+"/api/settings", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+tok)
 		req.Header.Set("Content-Type", "application/json")
@@ -116,7 +116,7 @@ func TestDisableDefaultWatchAlreadyDisabled(t *testing.T) {
 	}
 	demo := []string{"nginx:latest", "redis:latest"}
 	cfg := &config.Config{DefaultWatch: demo}
-	live := config.NewLiveSettings(3600, false, "", true, "", "") // 模拟已关闭状态
+	live := config.NewLiveSettings(3600, false, "", true) // 模拟已关闭状态
 	sc := scanner.New(cfg, st, nil, registry.NewClient(false), live)
 	router := NewRouter("./static", st, sc, registry.NewClient(false), live, []byte("test-secret"))
 	srv := httptest.NewServer(router)
@@ -131,7 +131,7 @@ func TestDisableDefaultWatchAlreadyDisabled(t *testing.T) {
 	}
 	tok := setupToken(t, srv.URL)
 
-	body := `{"scan_interval":3600,"scan_mode":"interval","scan_daily_time":"","registry_insecure":false,"registry_mirror":"","disable_default_watch":true,"dingtalk_webhook":"","dingtalk_secret":""}`
+	body := `{"scan_interval":3600,"scan_mode":"interval","scan_daily_time":"","registry_insecure":false,"registry_mirror":"","disable_default_watch":true}`
 	req, _ := http.NewRequest("PUT", srv.URL+"/api/settings", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/json")

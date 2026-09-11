@@ -27,6 +27,14 @@ func main() {
 		log.Fatalf("open store: %v", err)
 	}
 
+	// 旧版钉钉通知（settings 表 / 环境变量）迁移为「通知渠道」表的一条 dingtalk 渠道。
+	// 此后通知配置以渠道表为唯一来源，页面「设置 → 通知渠道」统一管理。
+	if migrated, merr := st.MigrateDingtalkToChannel(strings.TrimSpace(cfg.DingTalkWebhook), strings.TrimSpace(cfg.DingTalkSecret)); merr != nil {
+		log.Printf("dingtalk channel migration failed: %v", merr)
+	} else if migrated {
+		log.Printf("migrated legacy dingtalk config to notification channel")
+	}
+
 	// JWT 密钥：优先使用环境变量，否则从数据库加载或自动生成。
 	var jwtSecret []byte
 	if cfg.JWTSecret != "" {
@@ -63,7 +71,7 @@ func main() {
 	}
 
 	// 运行时可变配置：以环境变量为初值，并以数据库中持久化的设置覆盖（页面可改）。
-	live := config.NewLiveSettings(int(cfg.ScanInterval.Seconds()), cfg.RegistryInsecure, cfg.RegistryMirror, cfg.DisableDefault, strings.TrimSpace(cfg.DingTalkWebhook), strings.TrimSpace(cfg.DingTalkSecret))
+	live := config.NewLiveSettings(int(cfg.ScanInterval.Seconds()), cfg.RegistryInsecure, cfg.RegistryMirror, cfg.DisableDefault)
 	if m, err := st.LoadSettingsMap(); err == nil && len(m) > 0 {
 		live.Apply(config.SettingsFromMap(m))
 	}

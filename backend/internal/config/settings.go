@@ -9,6 +9,7 @@ import (
 
 // Settings 是可在页面上配置、并持久化到数据库的运行时设置。
 // 字段与 Config 中对应的环境变量一一对应，但运行期可被用户覆盖。
+// 通知渠道不在此列：钉钉/企微/飞书等已迁移为独立的「通知渠道」表管理。
 type Settings struct {
 	ScanInterval        int    `json:"scan_interval"`         // 间隔模式的扫描间隔（秒），<=0 表示禁用自动扫描
 	ScanMode            string `json:"scan_mode"`             // 调度模式：interval（间隔）/ daily（每天定时）
@@ -16,8 +17,6 @@ type Settings struct {
 	RegistryInsecure    bool   `json:"registry_insecure"`     // 是否允许 http 注册表
 	RegistryMirror      string `json:"registry_mirror"`       // 注册表镜像主机（非空时覆盖请求主机）
 	DisableDefaultWatch bool   `json:"disable_default_watch"` // 关闭内置演示监控列表
-	DingTalkWebhook     string `json:"dingtalk_webhook"`      // 钉钉通知 Webhook URL
-	DingTalkSecret      string `json:"dingtalk_secret"`       // 钉钉机器人加签密钥（为空表示不加签）
 }
 
 // 扫描调度模式。
@@ -69,21 +68,17 @@ type LiveSettings struct {
 	RegistryInsecure    bool
 	RegistryMirror      string
 	DisableDefaultWatch bool
-	DingTalkWebhook     string
-	DingTalkSecret      string
 }
 
 // NewLiveSettings 以环境变量初值构造 LiveSettings。
 // 调度模式无环境变量入口：默认间隔模式，定时模式仅由页面配置。
-func NewLiveSettings(scanSeconds int, insecure bool, mirror string, disableDefault bool, dingTalkWebhook, dingTalkSecret string) *LiveSettings {
+func NewLiveSettings(scanSeconds int, insecure bool, mirror string, disableDefault bool) *LiveSettings {
 	l := &LiveSettings{
 		ScanInterval:        scanSeconds,
 		ScanMode:            ScanModeInterval,
 		RegistryInsecure:    insecure,
 		RegistryMirror:      mirror,
 		DisableDefaultWatch: disableDefault,
-		DingTalkWebhook:     dingTalkWebhook,
-		DingTalkSecret:      dingTalkSecret,
 	}
 	l.broadcast = make(chan struct{})
 	return l
@@ -100,8 +95,6 @@ func (l *LiveSettings) Snapshot() Settings {
 		RegistryInsecure:    l.RegistryInsecure,
 		RegistryMirror:      l.RegistryMirror,
 		DisableDefaultWatch: l.DisableDefaultWatch,
-		DingTalkWebhook:     l.DingTalkWebhook,
-		DingTalkSecret:      l.DingTalkSecret,
 	}
 }
 
@@ -115,8 +108,6 @@ func (l *LiveSettings) Apply(s Settings) {
 	l.RegistryInsecure = s.RegistryInsecure
 	l.RegistryMirror = s.RegistryMirror
 	l.DisableDefaultWatch = s.DisableDefaultWatch
-	l.DingTalkWebhook = s.DingTalkWebhook
-	l.DingTalkSecret = s.DingTalkSecret
 	old := l.broadcast
 	l.broadcast = make(chan struct{})
 	l.mu.Unlock()
@@ -149,8 +140,6 @@ func SettingsToMap(s Settings) map[string]string {
 		"registry_insecure":     strconv.FormatBool(s.RegistryInsecure),
 		"registry_mirror":       s.RegistryMirror,
 		"disable_default_watch": strconv.FormatBool(s.DisableDefaultWatch),
-		"dingtalk_webhook":      s.DingTalkWebhook,
-		"dingtalk_secret":       s.DingTalkSecret,
 	}
 }
 
@@ -178,12 +167,6 @@ func SettingsFromMap(m map[string]string) Settings {
 	}
 	if v, ok := m["disable_default_watch"]; ok {
 		s.DisableDefaultWatch = v == "true" || v == "1"
-	}
-	if v, ok := m["dingtalk_webhook"]; ok {
-		s.DingTalkWebhook = v
-	}
-	if v, ok := m["dingtalk_secret"]; ok {
-		s.DingTalkSecret = v
 	}
 	return s
 }

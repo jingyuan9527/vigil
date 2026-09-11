@@ -90,7 +90,7 @@ func TestScannerFullPipeline(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"nginx:latest"}, DisableDefault: false}
-	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false))
 
 	sc.Run(context.Background(), false)
 	img, _ := st.GetImageByRef("nginx:latest")
@@ -129,7 +129,7 @@ func TestIgnoredSkipsAllDetection(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"mysql:8"}, DisableDefault: false}
-	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false))
 
 	// 首扫建立基线
 	sc.Run(context.Background(), false)
@@ -178,7 +178,7 @@ func TestPinWatchBaselineThenNewTag(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.7"}, DisableDefault: false}
-	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false))
 
 	newTagNotifs := func() []models.Notification {
 		all, _ := st.ListNotifications(false, 0)
@@ -237,7 +237,7 @@ func TestRollingTagNoTagInspection(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"mysql:latest"}, DisableDefault: false}
-	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false))
 
 	sc.Run(context.Background(), false)
 	if atomic.LoadInt32(tcalls) != 0 {
@@ -265,7 +265,7 @@ func TestForceScanBackfillsAndDedups(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.7"}, DisableDefault: false}
-	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false))
 
 	// 常规扫描：Pin-Watch 首扫基线 + local!=remote 但 digest 变化非「转移」（changed=false，首扫）→ 不通知
 	sc.Run(context.Background(), false)
@@ -302,7 +302,7 @@ func TestModeOverrideDigestOnly(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.7"}, DisableDefault: false}
-	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false))
 
 	// 首扫建立基线（此时还是 auto→pin-watch，会建立 seen）
 	sc.Run(context.Background(), false)

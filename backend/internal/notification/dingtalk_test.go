@@ -1,10 +1,12 @@
 package notification
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -62,6 +64,9 @@ func captureDingTalk(t *testing.T) (url string, getText func() string, cleanup f
 	var mu sync.Mutex
 	var text string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("timestamp") == "" {
+			t.Errorf("signed request expected, missing timestamp query param")
+		}
 		var msg struct {
 			Markdown struct {
 				Text string `json:"text"`
@@ -86,29 +91,71 @@ func captureDingTalk(t *testing.T) (url string, getText func() string, cleanup f
 		func() { srv.Close() }
 }
 
-// TestNotifyUpdateLatestTagLine 校验镜像更新提醒：latestTag 非空时附上
-// 「最新Tag」行，为空时不输出该行（老格式保持不变）。
-func TestNotifyUpdateLatestTagLine(t *testing.T) {
-	url, getText, cleanup := captureDingTalk(t)
-	defer cleanup()
-
-	if err := NotifyUpdate(url, "", "ghcr.io/jingyuan9527/stellar:latest",
-		"4611266078ea", "45f6f511ca", "v1.4.1"); err != nil {
-		t.Fatalf("NotifyUpdate with tag: %v", err)
-	}
-	got := getText()
-	for _, want := range []string{"**镜像**: ghcr.io/jingyuan9527/stellar:latest",
-		"**最新Tag**: `v1.4.1`", "**旧摘要**: `4611266078ea`", "**新摘要**: `45f6f511ca`"} {
-		if strings.Count(got, want) == 0 {
-			t.Errorf("content missing %q:\n%s", want, got)
+// TestDingTalkProviderUpdateMessage 校验钉钉渠道在真实发送链路上使用更新消息的 Markdown 内容：
+// latestTag 非空时附「最新Tag」行，为空时不输出该行（老格式保持一致）。
+func TestDingTalkProviderUpdateMessage(t *testing.T) {
+	for _, tc := range []struct {
+		latestTag   string
+		wantContain string
+		wantAbsent  string
+	}{
+		{"v1.4.1", "**最新Tag**: `v1.4.1`", ""},
+		{"", "", "最新Tag"},
+	} {
+		url, getText, cleanup := captureDingTalk(t)
+		cfg, _ := json.Marshal(map[string]string{"webhook": url, "secret": "secret"})
+		msg := UpdateMessage("ghcr.io/jingyuan9527/stellar:latest", "4611266078ea", "45f6f511ca", tc.latestTag)
+		if err := (dingtalkProvider{}).Send(context.Background(), string(cfg), msg); err != nil {
+			cleanup()
+			t.Fatalf("dingtalk send with tag %q: %v", tc.latestTag, err)
+		}
+		got := getText()
+		cleanup()
+		for _, want := range []string{"**镜像**: ghcr.io/jingyuan9527/stellar:latest",
+			"**旧摘要**: `4611266078ea`", "**新摘要**: `45f6f511ca`"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("content missing %q (latestTag=%q):\n%s", want, tc.latestTag, got)
+			}
+		}
+		if tc.wantContain != "" && !strings.Contains(got, tc.wantContain) {
+			t.Errorf("content missing %q (latestTag=%q):\n%s", tc.wantContain, tc.latestTag, got)
+		}
+		if tc.wantAbsent != "" && strings.Contains(got, tc.wantAbsent) {
+			t.Errorf("content should not contain %q when latestTag=%q:\n%s", tc.wantAbsent, tc.latestTag, got)
 		}
 	}
+}
 
-	if err := NotifyUpdate(url, "", "nginx:latest", "old", "new", ""); err != nil {
-		t.Fatalf("NotifyUpdate without tag: %v", err)
+// TestDingTalkValidate 校验钉钉渠道缺 webhook 时保存/发送均被拦截。
+func TestDingTalkValidate(t *testing.T) {
+	if err := (dingtalkProvider{}).Validate(`{}`); err == nil {
+		t.Error("dingtalk empty config should fail validation")
 	}
-	got = getText()
-	if strings.Contains(got, "最新Tag") {
-		t.Errorf("content should not contain 最新Tag when latestTag empty:\n%s", got)
+	if err := (dingtalkProvider{}).Validate(`{"webhook":"https://x"}`); err != nil {
+		t.Errorf("dingtalk valid config rejected: %v", err)
+	}
+}
+
+// TestSendUnknownKind 确保未注册的 kind 在发送与校验时都报错（配置错误尽早暴露）。
+func TestSendUnknownKind(t *testing.T) {
+	if err := Send(context.Background(), "no-such-kind", "{}", TestMessage()); err == nil {
+		t.Error("Send should error on unknown kind")
+	}
+	if err := Validate("no-such-kind", "{}"); err == nil {
+		t.Error("Validate should error on unknown kind")
+	}
+}
+
+// TestSendNilContext 空 context 也应正常工作（发送路径兜底为 Background）。
+func TestSendNilContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	cfg, _ := json.Marshal(map[string]string{"webhook": srv.URL})
+	msg := TestMessage()
+	if err := Send(nil, "dingtalk", string(cfg), msg); err != nil {
+		t.Fatalf("dingtalk send with nil ctx: %v", err)
 	}
 }

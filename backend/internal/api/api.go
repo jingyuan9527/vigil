@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -57,6 +58,8 @@ func NewRouter(staticDir string, st *store.Store, sc *scanner.Scanner, reg *regi
 	mux.HandleFunc("/api/notifications/clear-read", a.notificationsClearRead)
 	mux.HandleFunc("/api/notifications/", a.notificationByID)
 	mux.HandleFunc("/api/dingtalk/test", a.testDingTalk)
+	mux.HandleFunc("/api/channels", a.handleChannels)
+	mux.HandleFunc("/api/channels/", a.handleChannelByID)
 
 	// 认证中间件包裹 API 路由，静态资源不受影响
 	return a.withAuth(a.withStatic(mux))
@@ -578,8 +581,9 @@ func (a *api) notificationsClearRead(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"result": "ok", "deleted": n})
 }
 
-// testDingTalk 校验钉钉 Webhook 连通性：发送一条测试消息并回传结果。
-// 请求体可携带 webhook（便于保存前先试），缺省则使用当前已保存的设置。
+// testDingTalk 校验钉钉连通性（向后兼容保留的旧端点）：
+// 请求体可携带 webhook/secret（便于保存前先试），缺省则使用渠道表中首条启用的
+// dingtalk 渠道配置。渠道表无钉钉渠道时返回提示，引导去「通知渠道」配置。
 func (a *api) testDingTalk(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w)
@@ -596,21 +600,225 @@ func (a *api) testDingTalk(w http.ResponseWriter, r *http.Request) {
 	webhook := strings.TrimSpace(body.Webhook)
 	secret := strings.TrimSpace(body.Secret)
 	if webhook == "" {
-		snap := a.settings.Snapshot()
-		webhook = strings.TrimSpace(snap.DingTalkWebhook)
-		secret = strings.TrimSpace(snap.DingTalkSecret)
+		chans, err := a.store.ListChannels(true)
+		if err != nil {
+			serverError(w, r, err)
+			return
+		}
+		for _, c := range chans {
+			if c.Kind != "dingtalk" {
+				continue
+			}
+			var cfg struct {
+				Webhook string `json:"webhook"`
+				Secret  string `json:"secret"`
+			}
+			if json.Unmarshal([]byte(c.Config), &cfg) == nil {
+				webhook = strings.TrimSpace(cfg.Webhook)
+				secret = strings.TrimSpace(cfg.Secret)
+			}
+			break
+		}
 	}
 	if webhook == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "未配置钉钉 Webhook，请先在上方填写"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "未配置钉钉通知渠道，请先在「设置 → 通知渠道」中添加或直接填写 webhook"})
 		return
 	}
-	err := notification.SendDingTalk(webhook, secret,
-		"Vigil 连通性测试",
-		"### ✅ 连通性测试成功\n\n这是一条来自 Vigil 的测试消息，说明钉钉通知配置正确。\n\n**时间**: "+time.Now().Format("2006-01-02 15:04:05"),
-	)
+	test := notification.TestMessage()
+	err := notification.SendDingTalk(context.Background(), webhook, secret, "Vigil 连通性测试", test.Markdown)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": false, "error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
+}
+
+// ---- 通知渠道 ----
+
+// channelDTO 渠道对外形态：config 以键值对象给出（非 JSON 原文），前端无需自行解析。
+type channelDTO struct {
+	ID        int64                  `json:"id"`
+	Kind      string                 `json:"kind"`
+	Name      string                 `json:"name"`
+	Enabled   bool                   `json:"enabled"`
+	Config    map[string]interface{} `json:"config"`
+	CreatedAt time.Time              `json:"created_at"`
+}
+
+// channelRequest 创建/更新渠道的请求体。enabled 用指针以区分「未提供 vs 显式 false」。
+type channelRequest struct {
+	Kind    string                 `json:"kind"`
+	Name    string                 `json:"name"`
+	Enabled *bool                  `json:"enabled"`
+	Config  map[string]interface{} `json:"config"`
+}
+
+func channelToDTO(c *store.Channel) channelDTO {
+	dto := channelDTO{ID: c.ID, Kind: c.Kind, Name: c.Name, Enabled: c.Enabled, CreatedAt: c.CreatedAt}
+	m := map[string]interface{}{}
+	_ = json.Unmarshal([]byte(c.Config), &m)
+	dto.Config = m
+	return dto
+}
+
+// marshalConfig 把渠道配置对象序列化为 JSON 字符串（nil 归一为空对象）。
+func marshalConfig(cfg map[string]interface{}) (string, error) {
+	if cfg == nil {
+		cfg = map[string]interface{}{}
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// handleChannels 提供通知渠道列表（GET）与创建（POST）。
+func (a *api) handleChannels(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		chans, err := a.store.ListChannels(false)
+		if err != nil {
+			serverError(w, r, err)
+			return
+		}
+		out := make([]channelDTO, 0, len(chans))
+		for i := range chans {
+			out = append(out, channelToDTO(&chans[i]))
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"channels": out, "kinds": notification.Kinds()})
+	case http.MethodPost:
+		var req channelRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+			return
+		}
+		kind := strings.TrimSpace(req.Kind)
+		if !slices.Contains(notification.Kinds(), kind) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "不支持的渠道类型 " + kind})
+			return
+		}
+		cfg, err := marshalConfig(req.Config)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "渠道配置不是合法对象"})
+			return
+		}
+		if err := notification.Validate(kind, cfg); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		enabled := true
+		if req.Enabled != nil {
+			enabled = *req.Enabled
+		}
+		created, err := a.store.CreateChannel(kind, strings.TrimSpace(req.Name), cfg, enabled)
+		if err != nil {
+			serverError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, channelToDTO(created))
+	default:
+		methodNotAllowed(w)
+	}
+}
+
+// handleChannelByID 提供单条渠道的读取（GET）、更新（PUT）、删除（DELETE）
+// 与连通性测试（POST /test）。kind 创建后不可变，更新请求携带不同 kind 会被拒绝。
+func (a *api) handleChannelByID(w http.ResponseWriter, r *http.Request) {
+	id, sub, ok := parseChannelPath(r.URL.Path)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	ch, err := a.store.GetChannel(id)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	if ch == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "渠道不存在"})
+		return
+	}
+
+	if sub == "test" {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		testMsg := notification.TestMessage()
+		if err := notification.Send(context.Background(), ch.Kind, ch.Config, testMsg); err != nil {
+			writeJSON(w, http.StatusOK, map[string]interface{}{"ok": false, "error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, channelToDTO(ch))
+	case http.MethodPut:
+		var req channelRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+			return
+		}
+		if strings.TrimSpace(req.Kind) != "" && req.Kind != ch.Kind {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "渠道类型创建后不可变更"})
+			return
+		}
+		cfg := ch.Config
+		if req.Config != nil {
+			cfg, err = marshalConfig(req.Config)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "渠道配置不是合法对象"})
+				return
+			}
+			if err := notification.Validate(ch.Kind, cfg); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+		}
+		enabled := ch.Enabled
+		if req.Enabled != nil {
+			enabled = *req.Enabled
+		}
+		if err := a.store.UpdateChannel(id, strings.TrimSpace(req.Name), cfg, enabled); err != nil {
+			if err == store.ErrChannelNotFound {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "渠道不存在"})
+				return
+			}
+			serverError(w, r, err)
+			return
+		}
+		updated, _ := a.store.GetChannel(id)
+		writeJSON(w, http.StatusOK, channelToDTO(updated))
+	case http.MethodDelete:
+		// 删除为危险操作：接口层要求前端显式确认（confirm），此处不再二次拦截。
+		if err := a.store.DeleteChannel(id); err != nil {
+			if err == store.ErrChannelNotFound {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "渠道不存在"})
+				return
+			}
+			serverError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"result": "ok"})
+	default:
+		methodNotAllowed(w)
+	}
+}
+
+// parseChannelPath 解析 `/api/channels/{id}[/{sub}]`，失败返回 ok=false。
+func parseChannelPath(p string) (int64, string, bool) {
+	parts := strings.Split(strings.TrimPrefix(p, "/api/channels/"), "/")
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return 0, "", false
+	}
+	sub := ""
+	if len(parts) > 1 {
+		sub = parts[1]
+	}
+	return id, sub, true
 }

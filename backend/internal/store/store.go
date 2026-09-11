@@ -89,6 +89,14 @@ func migrate(db *sql.DB) error {
 		key   TEXT PRIMARY KEY,
 		value TEXT
 	);
+	CREATE TABLE IF NOT EXISTS notify_channels (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		kind        TEXT NOT NULL,
+		name        TEXT,
+		enabled     INTEGER NOT NULL DEFAULT 1,
+		config      TEXT NOT NULL DEFAULT '{}',
+		created_at  TEXT NOT NULL
+	);
 	CREATE TABLE IF NOT EXISTS auth_users (
 		username      TEXT PRIMARY KEY,
 		password_hash TEXT NOT NULL,

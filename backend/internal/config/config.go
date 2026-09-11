@@ -22,8 +22,10 @@ type Config struct {
 	AdminUser        string
 	AdminPassword    string
 	JWTSecret        string
-	DingTalkWebhook  string
-	DingTalkSecret   string
+	// 钉钉通知环境变量：仅作为首次启动迁移「通知渠道」表的初值
+	// （仓库已建 notify_channels，发布后配置入口收敛到页面渠道管理）。
+	DingTalkWebhook string
+	DingTalkSecret  string
 }
 
 func getEnv(key, def string) string {

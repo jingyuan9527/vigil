@@ -58,7 +58,7 @@ func TestClearReadThenRescanWatchOnly(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"nginx:latest"}, DisableDefault: false}
-	sc := New(cfg, st, nil, reg1, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, nil, reg1, config.NewLiveSettings(3600, false, "", false))
 
 	// 首扫基线（无通知）
 	sc.Run(context.Background(), false)
@@ -114,7 +114,7 @@ func TestForceScanFreshTransitionWatchOnly(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"busybox:latest"}, DisableDefault: false}
-	sc := New(cfg, st, nil, reg1, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, nil, reg1, config.NewLiveSettings(3600, false, "", false))
 
 	// 首扫基线（无通知）
 	sc.Run(context.Background(), false)
@@ -144,7 +144,7 @@ func TestForceScanWatchOnlyNeverMoved(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"redis:latest"}, DisableDefault: false}
-	sc := New(cfg, st, nil, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, nil, reg, config.NewLiveSettings(3600, false, "", false))
 
 	sc.Run(context.Background(), false)
 	sc.Run(context.Background(), true)
@@ -163,7 +163,7 @@ func TestClearReadThenRescanPinWatchNewTag(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.7"}, DisableDefault: false}
-	sc := New(cfg, st, nil, reg1, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, nil, reg1, config.NewLiveSettings(3600, false, "", false))
 
 	// 首扫建立 seen 基线
 	sc.Run(context.Background(), false)
@@ -214,7 +214,7 @@ func TestClearReadThenRescanDockerDiff(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.7"}, DisableDefault: false}
-	sc := New(cfg, st, dcli, reg1, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, dcli, reg1, config.NewLiveSettings(3600, false, "", false))
 
 	// 首扫基线：local!=remote 但 changed=false → 不通知
 	sc.Run(context.Background(), false)
@@ -248,7 +248,7 @@ func TestForceRescanRecoverBaselineSwallowedNewTag(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.5"}, DisableDefault: false}
-	sc := New(cfg, st, nil, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, nil, reg, config.NewLiveSettings(3600, false, "", false))
 
 	// 首巡基线吞掉 26/8.4.6，常规扫描保持沉默
 	sc.Run(context.Background(), false)
@@ -289,7 +289,7 @@ func TestForceRescanNoNewerVersionTagSilent(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"nginx:8.4.5"}, DisableDefault: false}
-	sc := New(cfg, st, nil, reg, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, nil, reg, config.NewLiveSettings(3600, false, "", false))
 
 	sc.Run(context.Background(), false)
 	sc.Run(context.Background(), true)
@@ -306,7 +306,7 @@ func TestForceScanSameRoundFreshTagNotDuplicated(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.7"}, DisableDefault: false}
-	sc := New(cfg, st, nil, reg1, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, nil, reg1, config.NewLiveSettings(3600, false, "", false))
 
 	sc.Run(context.Background(), false)
 

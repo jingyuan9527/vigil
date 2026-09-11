@@ -22,7 +22,7 @@ services:
       # - ADMIN_USER=admin                          # 管理员用户名（首次部署时自动创建）
       # - ADMIN_PASSWORD=your_password               # 管理员密码（首次部署时自动创建，至少 6 位）
       # - JWT_SECRET=your-secret-key                 # JWT 密钥（不设置则自动生成并持久化）
-      # - DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=xxx  # 钉钉通知 Webhook
+      # - DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=xxx  # 钉钉通知初值（首次启动迁入「通知渠道」）
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:54321/api/health"]
       interval: 30s

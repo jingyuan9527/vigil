@@ -41,7 +41,7 @@ func TestAutoReadNewTagOnceAdopted(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"redis:8.4.0"}, DisableDefault: false}
-	sc := New(cfg, st, dcli, reg1, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, dcli, reg1, config.NewLiveSettings(3600, false, "", false))
 
 	// 首巡基线（无通知）
 	sc.Run(context.Background(), false)
@@ -63,7 +63,7 @@ func TestAutoReadNewTagOnceAdopted(t *testing.T) {
 	defer regSrv3.Close()
 	dcli2, dockerSrv2 := newFakeDocker(t, "redis:8.4.1", "d841")
 	defer dockerSrv2.Close()
-	sc2 := New(cfg, st, dcli2, reg3, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc2 := New(cfg, st, dcli2, reg3, config.NewLiveSettings(3600, false, "", false))
 	sc2.Run(context.Background(), false)
 
 	if got := unreadNotifs(t, st, models.NotifNewTag); len(got) != 0 {
@@ -95,7 +95,7 @@ func TestAutoReadUpdateOnceSynced(t *testing.T) {
 
 	st, _ := store.Open(":memory:")
 	cfg := &config.Config{DefaultWatch: []string{"nginx:latest"}, DisableDefault: false}
-	sc := New(cfg, st, dcli, reg1, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc := New(cfg, st, dcli, reg1, config.NewLiveSettings(3600, false, "", false))
 
 	// 首扫 local==remote：基线，无通知
 	sc.Run(context.Background(), false)
@@ -118,7 +118,7 @@ func TestAutoReadUpdateOnceSynced(t *testing.T) {
 	// 用户拉取同步：本地摘要变为 bb → 常规扫描后自动转已读
 	dcli2, dockerSrv2 := newFakeDocker(t, "nginx:latest", "bbdigest")
 	defer dockerSrv2.Close()
-	sc2 := New(cfg, st, dcli2, reg2, config.NewLiveSettings(3600, false, "", false, "", ""))
+	sc2 := New(cfg, st, dcli2, reg2, config.NewLiveSettings(3600, false, "", false))
 	sc2.Run(context.Background(), false)
 
 	if got := unreadNotifs(t, st, models.NotifUpdate); len(got) != 0 {

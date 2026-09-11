@@ -33,6 +33,16 @@ func (s *Store) SaveSettingsMap(m map[string]string) error {
 	return nil
 }
 
+// DeleteSettingsKeys 删除一组设置键（渠道迁移后清理旧 dingtalk 键等遗留）。
+func (s *Store) DeleteSettingsKeys(keys ...string) error {
+	for _, k := range keys {
+		if _, err := s.db.Exec("DELETE FROM settings WHERE key=?", k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ---- JWT secret ----
 
 // GetJWTSecret 从 settings 表读取 JWT 密钥；不存在时返回空。

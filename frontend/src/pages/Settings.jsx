@@ -3,6 +3,7 @@ import { api } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import Spinner from '../components/Spinner'
 import ErrorState from '../components/ErrorState'
+import ChannelManager from '../components/ChannelManager'
 
 function Toggle({ checked, onChange }) {
   return (
@@ -128,8 +129,6 @@ export default function Settings() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
-  const [testing, setTesting] = useState(false)
-  const [testMsg, setTestMsg] = useState(null)
   const [loadError, setLoadError] = useState(false)
   // 间隔编辑草稿：值 + 单位（秒落库，单位仅前端换算）
   const [intervalDraft, setIntervalDraft] = useState({ v: 1, unit: 3600 })
@@ -173,23 +172,6 @@ export default function Settings() {
       setMsg({ type: 'error', text: '保存失败，请检查扫描计划填写后重试' })
     } finally {
       setSaving(false)
-    }
-  }
-
-  const onTestDingTalk = async () => {
-    setTesting(true)
-    setTestMsg(null)
-    try {
-      const res = await api.testDingTalk(form.dingtalk_webhook, form.dingtalk_secret)
-      if (res.ok) {
-        setTestMsg({ type: 'ok', text: '测试通知已发送，请检查钉钉群是否收到' })
-      } else {
-        setTestMsg({ type: 'error', text: '连通性测试失败：' + (res.error || '未知错误') })
-      }
-    } catch (e) {
-      setTestMsg({ type: 'error', text: '测试请求失败：' + (e?.message || e) })
-    } finally {
-      setTesting(false)
     }
   }
 
@@ -302,7 +284,10 @@ export default function Settings() {
             </div>
           </BentoCard>
 
-          {/* 允许 http 注册表 */}
+          {/* 通知渠道：钉钉/企微/飞书/Telegram/通用 Webhook，多渠道并行推送 */}
+          <ChannelManager />
+
+            {/* 允许 http 注册表 */}
           <BentoCard>
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -331,53 +316,6 @@ export default function Settings() {
             <div className="mt-3 space-y-1 text-xs text-zinc-400 dark:text-zinc-500">
               <p>· Docker Hub 加速：填写镜像代理域名</p>
               <p>· 私有仓库：填写 registry 主机名（如 harbor.example.com）</p>
-            </div>
-          </BentoCard>
-
-          {/* 钉钉通知 Webhook */}
-          <BentoCard span="wide">
-            <div className="font-medium text-zinc-900 dark:text-zinc-100">钉钉通知 Webhook</div>
-            <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-              镜像更新时自动发送钉钉通知。留空不启用。
-            </div>
-            <input
-              type="text"
-              placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx"
-              value={form.dingtalk_webhook}
-              onChange={(e) => update({ dingtalk_webhook: e.target.value })}
-              className="mt-3 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-            />
-            <div className="mt-3 font-medium text-zinc-900 dark:text-zinc-100">加签密钥（可选）</div>
-            <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-              若机器人启用了「加签」安全设置，请填写密钥；留空表示不加签。
-            </div>
-            <input
-              type="password"
-              placeholder="钉钉机器人安全设置中的加签密钥"
-              value={form.dingtalk_secret}
-              onChange={(e) => update({ dingtalk_secret: e.target.value })}
-              className="mt-3 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-            />
-            <div className="mt-3">
-              <button
-                type="button"
-                onClick={onTestDingTalk}
-                disabled={testing || !form.dingtalk_webhook.trim()}
-                className="inline-flex items-center gap-3 rounded-xl border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
-              >
-                {testing ? '测试中…' : '测试连接'}
-              </button>
-              {testMsg && (
-                <span
-                  className={`ml-3 text-sm ${
-                    testMsg.type === 'ok'
-                      ? 'text-emerald-600 dark:text-emerald-400'
-                      : 'text-rose-600 dark:text-rose-400'
-                  }`}
-                >
-                  {testMsg.text}
-                </span>
-              )}
             </div>
           </BentoCard>
         </div>

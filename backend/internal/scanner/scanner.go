@@ -44,32 +44,37 @@ func (s *Scanner) registry() *registry.Client { return s.reg.Load() }
 // 供设置页关闭演示列表时清理已产生的演示镜像行。
 func (s *Scanner) DefaultWatchRefs() []string { return s.cfg.DefaultWatch }
 
-// notifyUpdate 异步推送「有新版本」钉钉通知；未配置 webhook 时静默跳过。
+// notifyUpdate 异步扇出「有新版本」通知到所有启用渠道；未配置渠道时静默跳过。
 // latestTag 是仓库远端版本号最高的 tag（尽力而为，取不到传空串）。
-// 站内通知已同步落库，钉钉失败只记日志、不回滚。
+// 站内通知已同步落库，外部推送失败只记日志、不回滚。
 func (s *Scanner) notifyUpdate(ref, oldDigest, newDigest, latestTag string) {
-	snap := s.settings.Snapshot()
-	if snap.DingTalkWebhook == "" {
+	channels, err := s.store.ListChannels(true)
+	if err != nil || len(channels) == 0 {
 		return
 	}
-	go func(webhook, secret string) {
-		if err := notification.NotifyUpdate(webhook, secret, ref, oldDigest, newDigest, latestTag); err != nil {
-			log.Printf("dingtalk notify failed for %s: %v", ref, err)
-		}
-	}(snap.DingTalkWebhook, snap.DingTalkSecret)
+	msg := notification.UpdateMessage(ref, oldDigest, newDigest, latestTag)
+	s.fanout(channels, msg, "update", ref)
 }
 
-// notifyNewTag 异步推送「可选更新」（新版本标签）钉钉通知；未配置 webhook 时静默跳过。
+// notifyNewTag 异步扇出「可选更新」（新版本标签）通知到所有启用渠道。
 func (s *Scanner) notifyNewTag(ref, curTag, newTag string) {
-	snap := s.settings.Snapshot()
-	if snap.DingTalkWebhook == "" {
+	channels, err := s.store.ListChannels(true)
+	if err != nil || len(channels) == 0 {
 		return
 	}
-	go func(webhook, secret string) {
-		if err := notification.NotifyNewTag(webhook, secret, ref, curTag, newTag); err != nil {
-			log.Printf("dingtalk notify-newtag failed for %s: %v", ref, err)
-		}
-	}(snap.DingTalkWebhook, snap.DingTalkSecret)
+	msg := notification.NewTagMessage(ref, curTag, newTag)
+	s.fanout(channels, msg, "new-tag", ref)
+}
+
+// fanout 把消息并行发送到全部启用渠道，逐渠道上报失败（不互相阻塞、不打断扫描）。
+func (s *Scanner) fanout(channels []store.Channel, msg notification.Message, notifType, ref string) {
+	for _, c := range channels {
+		go func(c store.Channel) {
+			if err := notification.Send(context.Background(), c.Kind, c.Config, msg); err != nil {
+				log.Printf("notify %s(%s) %s failed for %s: %v", c.Kind, c.Name, notifType, ref, err)
+			}
+		}(c)
+	}
 }
 
 type job struct {

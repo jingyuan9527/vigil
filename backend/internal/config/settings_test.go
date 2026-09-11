@@ -64,8 +64,6 @@ func TestSettingsMapRoundTrip(t *testing.T) {
 		RegistryInsecure:    true,
 		RegistryMirror:      "mirror.example.com",
 		DisableDefaultWatch: true,
-		DingTalkWebhook:     "https://oapi.dingtalk.com/robot/send?access_token=x",
-		DingTalkSecret:      "SEC123",
 	}
 	out := SettingsFromMap(SettingsToMap(in))
 	if out != in {

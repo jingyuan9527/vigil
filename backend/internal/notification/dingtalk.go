@@ -2,6 +2,7 @@ package notification
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -27,6 +28,12 @@ type DingTalkMarkdown struct {
 	Text  string `json:"text"`
 }
 
+// dingtalkConfig 钉钉渠道配置。
+type dingtalkConfig struct {
+	Webhook string `json:"webhook"`
+	Secret  string `json:"secret"` // 加签密钥，可选
+}
+
 // signURL 若配置了加签 secret，则按钉钉加签算法为 Webhook 追加 timestamp 与 sign 参数。
 // 加签算法：HMAC-SHA256(stringToSign, secret) → base64 → URLEncode，
 // 其中 stringToSign = "<timestamp毫秒>\n<secret>"。secret 为空则原样返回。
@@ -47,9 +54,12 @@ func signURL(webhookURL, secret string) string {
 }
 
 // SendDingTalk 向钉钉 Webhook 发送 Markdown 通知。secret 非空时自动加签。
-func SendDingTalk(webhookURL, secret, title, content string) error {
+func SendDingTalk(ctx context.Context, webhookURL, secret, title, content string) error {
 	if strings.TrimSpace(webhookURL) == "" {
-		return nil
+		return fmt.Errorf("dingtalk webhook url is empty")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	target := signURL(webhookURL, secret)
 	msg := DingTalkMessage{
@@ -65,7 +75,12 @@ func SendDingTalk(webhookURL, secret, title, content string) error {
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post(target, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build dingtalk request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("send dingtalk: %w", err)
 	}
@@ -78,39 +93,28 @@ func SendDingTalk(webhookURL, secret, title, content string) error {
 	return nil
 }
 
-// NotifyUpdate 发送镜像更新通知到钉钉。latestTag 为仓库远端版本号最高的 tag
-// （如 v1.4.1），非空时附在提醒中；secret 非空时自动加签。
-func NotifyUpdate(webhookURL, secret, imageRef, oldDigest, newDigest, latestTag string) error {
-	title := "Vigil 镜像更新通知"
-	now := time.Now().Format("2006-01-02 15:04:05")
-	tagLine := ""
-	if latestTag != "" {
-		tagLine = fmt.Sprintf("**最新Tag**: `%s`\n\n", latestTag)
+// dingtalkProvider 钉钉渠道实现。
+type dingtalkProvider struct{}
+
+// Validate 校验钉钉配置是否具备发送条件（webhook 必填）。
+func (dingtalkProvider) Validate(cfg string) error {
+	c, err := decodeConfig[dingtalkConfig](cfg)
+	if err != nil {
+		return err
 	}
-	content := fmt.Sprintf(
-		"### 🔔 镜像更新提醒\n\n"+
-			"**镜像**: %s\n\n"+
-			"%s"+
-			"**旧摘要**: `%s`\n\n"+
-			"**新摘要**: `%s`\n\n"+
-			"**时间**: %s\n",
-		imageRef, tagLine, oldDigest, newDigest, now,
-	)
-	return SendDingTalk(webhookURL, secret, title, content)
+	if strings.TrimSpace(c.Webhook) == "" {
+		return fmt.Errorf("钉钉渠道缺少 webhook")
+	}
+	return nil
 }
 
-// NotifyNewTag 发送「更高独立版本」弱提醒到钉钉。secret 非空时自动加签。
-func NotifyNewTag(webhookURL, secret, imageRef, currentTag, newerTag string) error {
-	title := "Vigil 可选新版本提醒"
-	content := fmt.Sprintf(
-		"### ⭐ 镜像出现更新的独立版本\n\n"+
-			"**镜像**: %s\n\n"+
-			"**当前版本**: `%s`\n\n"+
-			"**可选新版本**: `%s`\n\n"+
-			"**说明**: 检测到仓库存在更高版本（如大版本升级），当前仍在监控旧版本，可按需升级。\n\n"+
-			"**时间**: %s\n",
-		imageRef, currentTag, newerTag,
-		time.Now().Format("2006-01-02 15:04:05"),
-	)
-	return SendDingTalk(webhookURL, secret, title, content)
+// Send 把统一消息以 Markdown 形式推送到钉钉机器人。
+func (dingtalkProvider) Send(ctx context.Context, cfg string, msg Message) error {
+	c, err := decodeConfig[dingtalkConfig](cfg)
+	if err != nil {
+		return err
+	}
+	return SendDingTalk(ctx, c.Webhook, c.Secret, msg.Title, msg.Markdown)
 }
+
+func init() { Register("dingtalk", dingtalkProvider{}) }

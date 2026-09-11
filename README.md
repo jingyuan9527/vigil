@@ -24,12 +24,12 @@ _应用名 Vigil · Docker 镜像监控_
 
 </div>
 
-一个参考 [diun](https://github.com/crazy-max/diun) 与 [wud (What's Up Docker)](https://github.com/fmartinou/whats-up-docker) 的 Docker 镜像更新监控工具：自动采集本机镜像（或手动添加监控项），比对注册表摘要与新版本标签，发现更新第一时间推送提醒（站内 + 钉钉）。
+一个参考 [diun](https://github.com/crazy-max/diun) 与 [wud (What's Up Docker)](https://github.com/fmartinou/whats-up-docker) 的 Docker 镜像更新监控工具：自动采集本机镜像（或手动添加监控项），比对注册表摘要与新版本标签，发现更新第一时间推送提醒（站内 + 多渠道）。
 
 **特性一览**
 
 - 🔍 **两种检测模式自动分配**：浮动标签（`latest` 等）追踪摘要变化；版本号标签（如 `8.4.5`）额外监视仓库的新版本 tag（如锁定 `8.4.5` 而仓库已有 `26`）
-- 🔔 **两级通知**：「有新版本」（当前 tag 内容变更）与「可选更新」（出现更高的独立版本 tag），支持钉钉机器人推送
+- 🔔 **两级通知**：「有新版本」（当前 tag 内容变更）与「可选更新」（出现更高的独立版本 tag），支持**多推送渠道**并行（钉钉 / 企业微信 / 飞书 / Telegram / 通用 Webhook）
 - 🖥️ **开箱即用的 Web UI**：单容器、单端口（54321）部署，仪表盘 / 镜像列表 / 版本对比 / 通知中心 / 在线设置
 - 🔐 **账号认证**：JWT httpOnly Cookie + 登录限流；SQLite 持久化，数据不出本机
 - 🧱 **多架构镜像**：GitHub Actions 自动构建 `linux/amd64` 与 `linux/arm64`，x86 服务器与树莓派均可直接拉取
@@ -123,7 +123,7 @@ cd frontend && npm install && npm run dev
 
 1. **采集**：通过 Docker Engine API 读取本机全部带 tag 镜像及其摘要，合并 `WATCH` / 手动添加的纯远端监控项。
 2. **检测**：向注册表（Docker Hub / GHCR / 私有 registry）查询当前 tag 的 manifest 摘要与本地比对；Pin-Watch 模式额外巡检仓库完整 tag 列表。
-3. **通知**：当前 tag 摘要变化 → 「有新版本」；仓库出现更高的新版本 tag → 「可选更新」；站内通知 + 钉钉推送，并记录版本时间线。
+3. **通知**：当前 tag 摘要变化 → 「有新版本」；仓库出现更高的新版本 tag → 「可选更新」；站内通知 + 所有启用渠道推送（钉钉 / 企微 / 飞书 / Telegram / 通用 Webhook），并记录版本时间线。
 
 ---
 
@@ -150,7 +150,7 @@ cd frontend && npm install && npm run dev
 - 已读/清空仅影响界面展示，不影响去重基线。
 
 ### 强制扫描（「全部重新扫描」）
-语义为**重新广播**：无视去重与已读，把所有镜像当成从未通知过来重新判定差异，每次触发都会再次通知（系统 + 钉钉），适合运维复盘或清空已读后找回提醒。
+语义为**重新广播**：无视去重与已读，把所有镜像当成从未通知过来重新判定差异，每次触发都会再次通知（系统 + 全部渠道），适合运维复盘或清空已读后找回提醒。
 - 本地镜像：本地摘要 ≠ 远端摘要即重新广播。
 - 纯远端监控：以版本时间线中最早记录的摘要为基线，仅当与当前远端不同才重新广播。
 - Pin-Watch 镜像：按版本号比对仓库 tag 列表，存在比锁定 tag 更高的版本 → 重播最新的一个「可选更新」通知（含首巡基线吞掉的更高版本，如锁定 `8.4.5` 而仓库已有 `26`）；仓库无更高版本时不重播。
@@ -163,10 +163,10 @@ cd frontend && npm install && npm run dev
 - **仪表盘**：监控总览（已是最新 / 有更新 / 未读）与状态分布、最近更新动态、扫描信息一览。
 - **镜像列表**：有更新的排在前；「监控概览」统计卡即状态筛选入口（点击切换、再点取消，零计数自动隐藏），支持搜索与分页；每张卡片可切换检测模式、忽略/恢复、移除，或进入版本对比。
 - **版本对比**：本地 vs 远端摘要（存在差异时高亮）、可用标签（按版本号新→旧排序，超长默认折叠）与版本时间线。
-- **更新通知**：按「有新版本 / 可选更新」分组独立展示，支持未读过滤、单条/全部已读、清空已读与「全部重新扫描」（二次确认后会重新广播通知，含钉钉）。
-- **设置**：在线调整扫描间隔、演示列表、http 注册表、注册表镜像与钉钉通知，保存后即时生效并持久化（重启保留）。
+- **更新通知**：按「有新版本 / 可选更新」分组独立展示，支持未读过滤、单条/全部已读、清空已读与「全部重新扫描」（二次确认后会重新广播通知，含全部渠道）。
+- **设置**：在线调整扫描间隔、演示列表、http 注册表、注册表镜像与**通知渠道**（多类型增删改、启用/停用、单渠道连通性测试），保存后即时生效并持久化（重启保留）。
 
-| 设置（钉钉等运行时参数） | 登录（首次访问初始化管理员） |
+| 设置（通知渠道等运行时参数） | 登录（首次访问初始化管理员） |
 |---|---|
 | ![](docs/screenshots/settings.png) | ![](docs/screenshots/login.png) |
 
@@ -188,10 +188,10 @@ cd frontend && npm install && npm run dev
 | `DISABLE_DEFAULT_WATCH` | `true` | 内置演示监控列表（nginx / redis / postgres 等）默认关闭；设为 `0`（或 `false`）启用演示数据 |
 | `ADMIN_USER` / `ADMIN_PASSWORD` | 空 | 首次部署自动创建管理员（两者需同时设置，密码至少 6 位） |
 | `JWT_SECRET` | 空 | JWT 签名密钥；不设置则自动生成并持久化到数据库 |
-| `DINGTALK_WEBHOOK` | 空 | 钉钉机器人 Webhook，配置后更新自动推送钉钉 |
-| `DINGTALK_SECRET` | 空 | 钉钉机器人加签密钥（机器人开启「加签」安全设置时填写） |
+| `DINGTALK_WEBHOOK` | 空 | 钉钉机器人 Webhook；**仅作为首次启动把钉钉迁移为「通知渠道」的初值**，此后在页面「设置 → 通知渠道」统一管理 |
+| `DINGTALK_SECRET` | 空 | 钉钉机器人加签密钥（机器人开启「加签」安全设置时填写），随迁移一并写入渠道 |
 
-> 扫描间隔、演示列表、http 注册表、注册表镜像、钉钉 Webhook / 加签密钥这六项**也可在页面「设置」中直接修改**，保存后即时生效并持久化到数据库，重启后仍然保留；环境变量仅作为首次启动的初值。
+> 扫描间隔、演示列表、http 注册表、注册表镜像这四项**也可在页面「设置」中直接修改**，保存后即时生效并持久化到数据库，重启后仍然保留；环境变量仅作为首次启动的初值。通知渠道则由页面「设置 → 通知渠道」独立管理（`DINGTALK_*` 环境变量只做一次性的迁移初值）。
 
 ---
 
@@ -218,7 +218,11 @@ cd frontend && npm install && npm run dev
 | POST | `/api/notifications/read-all` | 全部已读 |
 | POST | `/api/notifications/clear-read` | 清空全部已读通知（未读不受影响） |
 | GET / PUT | `/api/settings` | 读取 / 更新运行时设置（持久化并即时生效） |
-| POST | `/api/dingtalk/test` | 测试钉钉 Webhook 连通性 |
+| GET | `/api/channels` | 通知渠道列表（含插件式渠道类型） |
+| POST | `/api/channels` | 新增通知渠道 `{ "kind", "name", "enabled", "config": {...} }`（kind：`dingtalk` / `wecom` / `feishu` / `telegram` / `webhook`） |
+| GET / PUT / DELETE | `/api/channels/:id` | 读取 / 更新 / 删除单条渠道 |
+| POST | `/api/channels/:id/test` | 向指定渠道发送测试消息 |
+| POST | `/api/dingtalk/test` | 测试钉钉连通性（旧接口保留：可携带 `webhook/secret`，缺省用渠道表中首条启用的钉钉渠道） |
 
 > **认证与安全**：JWT 通过 `httpOnly` cookie（`SameSite=Lax`）下发，前端 JS 不接触令牌，降低 XSS 窃取风险；跨站请求不携带 cookie，天然抵御 CSRF。登录/初始化接口按 IP 限流：连续 5 次失败锁定 15 分钟。
 >
@@ -268,9 +272,10 @@ image: ghcr.io/jingyuan9527/vigil:1
 │       ├── registry/       # 注册表客户端（manifest 摘要 + 鉴权）
 │       ├── store/          # SQLite 存储与 CRUD
 │       ├── scanner/        # 扫描编排（采集→检测→通知）
-│       ├── notification/   # 钉钉推送
+│       ├── notification/   # 多渠道推送
 │       ├── auth/           # 认证与限流
 │       └── api/            # REST 路由 + 静态资源服务
 └── frontend/               # React + Tailwind 前端
     └── src/pages/          # Dashboard / Images / Compare / Notifications / Settings
 ```
+
