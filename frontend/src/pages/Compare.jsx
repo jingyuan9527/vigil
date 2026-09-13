@@ -5,6 +5,7 @@ import BentoCard from '../components/BentoCard'
 import StatusBadge from '../components/StatusBadge'
 import Spinner from '../components/Spinner'
 import ErrorState from '../components/ErrorState'
+import Drawer from '../components/Drawer'
 
 const TL_PREVIEW = 10 // 版本时间线默认展示条数，超出折叠
 const LATEST_VERSIONS = 2 // 版本号区域仅展示最近 N 个数字版本（最新者高亮）
@@ -29,13 +30,14 @@ const STATUS_DOT = {
   ignored: 'bg-zinc-400',
 }
 
-// 版本号感知的 tag 排序：与后端 version.Compare 一致（按段比较、缺段补 0），
-// 可解析的降序在前（新版本一眼可见），其余（浮动/描述性 tag）按字典序垫底。
-function parseVer(tag) {
+// 解析 tag 的数字版本主体，比较规则与后端 version.Compare 一致（去 v 前缀与 -suffix、
+// 按段比较、缺段补 0）。返回 { base, segs }；latest/lts/edge 等浮动 tag 返回 null。
+function parseTag(tag) {
   const m = String(tag).replace(/^v/i, '').match(/^(\d+(?:\.\d+)*)(?:$|[-+._])/)
   if (!m) return null
-  return m[1].split('.').map(Number)
+  return { base: m[1], segs: m[1].split('.').map(Number) }
 }
+
 function cmpVer(a, b) {
   const n = Math.max(a.length, b.length)
   for (let i = 0; i < n; i++) {
@@ -45,17 +47,20 @@ function cmpVer(a, b) {
   }
   return 0
 }
-function sortTagsVersionFirst(tags) {
-  const numbered = []
-  const others = []
+
+// 收集数字版本号并按新→旧排序。同一基础版本（1.31.5）的变体 tag
+// （1.31.5-perl / 1.31.5-alpine3.24）合并为一条并统计变体数，
+// 否则「共 N 个版本」会被后缀放大数十倍，且「最新」会落在变体 tag 上。
+function collectBaseVersions(tags) {
+  const map = new Map()
   for (const t of tags) {
-    const v = parseVer(t)
-    if (v) numbered.push([t, v])
-    else others.push(t)
+    const v = parseTag(t)
+    if (!v) continue
+    const hit = map.get(v.base)
+    if (hit) hit.count++
+    else map.set(v.base, { base: v.base, segs: v.segs, count: 1 })
   }
-  numbered.sort((a, b) => cmpVer(b[1], a[1]) || b[0].localeCompare(a[0]))
-  others.sort((a, b) => a.localeCompare(b))
-  return [...numbered.map(([t]) => t), ...others]
+  return [...map.values()].sort((a, b) => cmpVer(b.segs, a.segs) || b.base.localeCompare(a.base))
 }
 
 export default function Compare() {
@@ -70,6 +75,8 @@ export default function Compare() {
   const [selectorOpen, setSelectorOpen] = useState(false) // 移动端 chip 列表展开
   const [selectorOverflow, setSelectorOverflow] = useState(false) // 折叠态是否有被截断的 chip
   const [tlOpen, setTlOpen] = useState(false) // 版本时间线展开
+  const [versionsOpen, setVersionsOpen] = useState(false) // 「全部数字版本」抽屉
+  const [versionQuery, setVersionQuery] = useState('') // 抽屉内版本号搜索
   const selectorRef = useRef(null)
 
   const id = params.get('id')
@@ -147,10 +154,14 @@ export default function Compare() {
 
   const tags = (detail && detail.tags) || []
   const versions = (detail && detail.versions) || []
-  // 仅保留可解析为数字版本号的 tag：latest 等浮动 tag 不代表版本高低，
-  // 若纳入排序会把「最新」误标到浮动 tag 上。排序后取前 N 个，第 1 个即当前最新版本。
-  const numberedTags = useMemo(() => sortTagsVersionFirst(tags).filter((t) => parseVer(t)), [tags])
-  const latestTags = useMemo(() => numberedTags.slice(0, LATEST_VERSIONS), [numberedTags])
+  // 仅统计可解析为数字版本号的 tag（latest 等浮动 tag 不代表版本高低，纳入会把「最新」误标），
+  // 同一基础版本合并计数后按新→旧排序，取前 N 个，第 1 个即当前最新版本。
+  const baseVersions = useMemo(() => collectBaseVersions(tags), [tags])
+  const latestVersions = useMemo(() => baseVersions.slice(0, LATEST_VERSIONS), [baseVersions])
+  const filteredVersions = useMemo(() => {
+    const q = versionQuery.trim()
+    return q ? baseVersions.filter((v) => v.base.includes(q)) : baseVersions
+  }, [baseVersions, versionQuery])
   const shownVersions = tlOpen ? versions : versions.slice(0, TL_PREVIEW)
   const digestDiff = !!detail && !!detail.image && detail.image.local_digest !== detail.image.remote_digest
 
@@ -326,34 +337,41 @@ export default function Compare() {
                 <BentoCard span="wide">
                   <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
                     <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">版本号</h3>
-                    {numberedTags.length > 0 && (
-                      <span className="text-xs tabular-nums text-zinc-400 dark:text-zinc-500">共 {numberedTags.length} 个数字版本</span>
-                    )}
+                    <div className="flex items-center gap-3">
+                      {baseVersions.length > 0 && (
+                        <span className="text-xs tabular-nums text-zinc-400 dark:text-zinc-500">共 {baseVersions.length} 个数字版本</span>
+                      )}
+                      {baseVersions.length > LATEST_VERSIONS && (
+                        <button onClick={() => setVersionsOpen(true)} className="text-xs font-medium text-bento-accent transition-colors hover:underline">
+                          查看全部
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <p className="text-xs text-zinc-400 dark:text-zinc-500">
-                    仅展示最近 {LATEST_VERSIONS} 个数字版本号，按版本新→旧排序（latest 等浮动 tag 不计入）
+                    仅展示最近 {LATEST_VERSIONS} 个数字版本号，按版本新→旧排序（同一版本的变体标签已合并）
                   </p>
                   <div className="mt-4 flex flex-wrap items-center gap-3">
-                    {latestTags.length ? (
-                      latestTags.map((t, idx) =>
+                    {latestVersions.length ? (
+                      latestVersions.map((v, idx) =>
                         idx === 0 ? (
                           <span
-                            key={t}
-                            title={t}
+                            key={v.base}
+                            title={v.count > 1 ? `${v.base}（另有 ${v.count - 1} 个变体标签）` : v.base}
                             className="flex items-center gap-3 rounded-xl bg-blue-600 px-3.5 py-2 font-mono text-sm font-semibold text-white shadow-sm"
                           >
                             <span className="rounded-md bg-white/25 px-1.5 py-0.5 font-sans text-[10px] font-semibold leading-none">
                               最新
                             </span>
-                            <span className="max-w-[18rem] truncate">{t}</span>
+                            <span className="max-w-[18rem] truncate">{v.base}</span>
                           </span>
                         ) : (
                           <span
-                            key={t}
-                            title={t}
+                            key={v.base}
+                            title={v.count > 1 ? `${v.base}（另有 ${v.count - 1} 个变体标签）` : v.base}
                             className="flex items-center gap-3 rounded-xl bg-zinc-100 px-3 py-1.5 font-mono text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
                           >
-                            <span className="max-w-[16rem] truncate">{t}</span>
+                            <span className="max-w-[16rem] truncate">{v.base}</span>
                           </span>
                         ),
                       )
@@ -412,6 +430,38 @@ export default function Compare() {
           )}
         </div>
       </div>
+
+      {/* 全部数字版本：可达上千条，用抽屉 + 搜索承载，不做内联铺开 */}
+      <Drawer
+        open={versionsOpen}
+        title="全部数字版本"
+        description={`共 ${baseVersions.length} 个数字版本，按版本新→旧排序；同一版本的变体标签已合并计数`}
+        onClose={() => setVersionsOpen(false)}
+      >
+        <input
+          value={versionQuery}
+          onChange={(e) => setVersionQuery(e.target.value)}
+          placeholder="搜索版本号…"
+          className="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm outline-none transition-all focus:border-bento-accent focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+        />
+        <div className="mt-3 space-y-0.5">
+          {filteredVersions.length ? (
+            filteredVersions.map((v) => (
+              <div key={v.base} className="flex items-center gap-3 rounded-xl px-3 py-2 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+                <span className="font-mono text-sm text-zinc-700 dark:text-zinc-200">{v.base}</span>
+                {v.base === latestVersions[0]?.base && (
+                  <span className="rounded-md bg-blue-600 px-1.5 py-0.5 font-sans text-[10px] font-semibold leading-none text-white">最新</span>
+                )}
+                {v.count > 1 && (
+                  <span className="ml-auto shrink-0 text-xs tabular-nums text-zinc-400 dark:text-zinc-500">{v.count} 个变体</span>
+                )}
+              </div>
+            ))
+          ) : (
+            <p className="text-sm text-zinc-400">没有匹配的版本号</p>
+          )}
+        </div>
+      </Drawer>
     </div>
   )
 }
