@@ -55,6 +55,34 @@ func (s *Store) CreateNotification(n *models.Notification) error {
 	return tx.Commit()
 }
 
+// HasNotificationMissingLatestTag 报告该镜像是否存在 latest_tag 为空的 update 通知。
+// 扫描时据此按需触发回填，避免对正常镜像每次扫描都额外请求仓库 tags/list。
+func (s *Store) HasNotificationMissingLatestTag(imageID int64) (bool, error) {
+	var n int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM notifications
+		 WHERE image_id=? AND type='update' AND (latest_tag IS NULL OR latest_tag='')`,
+		imageID).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// BackfillNotificationLatestTag 为该镜像下缺版本号的 update 通知补写最新版本号。
+// latest_tag 是后加列，历史行没有该值，页面只能展示无信息量的回退文案；
+// 扫描时补上当前最新版本号即可恢复「最新版本 vX.Y.Z」的展示。返回受影响行数。
+func (s *Store) BackfillNotificationLatestTag(imageID int64, latestTag string) (int64, error) {
+	res, err := s.db.Exec(
+		`UPDATE notifications SET latest_tag=?
+		 WHERE image_id=? AND type='update' AND (latest_tag IS NULL OR latest_tag='')`,
+		latestTag, imageID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // TrimReadNotifications 自动保留策略：只保留最近 keep 条已读通知，更老的删除；
 // 未读通知不受影响。返回删除条数。
 func (s *Store) TrimReadNotifications(keep int) (int64, error) {
@@ -145,26 +173,27 @@ func (s *Store) ListNotifications(unreadOnly bool, cursorID int64) ([]models.Not
 	defer rows.Close()
 	var out []models.Notification
 	for rows.Next() {
+		// 文本列均可空：latest_tag 是后加列，历史行值为 NULL；其余列虽由本包统一写入空串，
+		// 也允许外部导入/手工改库产生 NULL。统一用 NullString 承接后经 ns() 降级为空串，
+		// 避免 "converting NULL to string is unsupported" 打挂整个列表接口。
 		var (
-			id                                                 int64
-			imageID                                            int64
-			imageName, reference                               string
-			oldDigest, newDigest, oldTag, newTag, typ, message string
-			// latestTag 是后加的列：存量行值为 NULL，必须用 NullString 承接（NULL -> ""）。
-			latestTag sql.NullString
-			read      int
-			createdAt string
+			id                                                                             int64
+			imageID                                                                        int64
+			typ                                                                            string
+			read                                                                           int
+			createdAt                                                                      string
+			imageName, reference, oldDigest, newDigest, oldTag, newTag, latestTag, message sql.NullString
 		)
 		if err := rows.Scan(&id, &imageID, &imageName, &reference, &oldDigest, &newDigest,
 			&oldTag, &newTag, &latestTag, &typ, &message, &read, &createdAt); err != nil {
 			return nil, err
 		}
 		out = append(out, models.Notification{
-			ID: id, ImageID: imageID, ImageName: imageName, Reference: reference,
-			OldDigest: oldDigest, NewDigest: newDigest, OldTag: oldTag, NewTag: newTag,
-			LatestTag: ns(latestTag),
-			Type:      models.NotificationKind(typ),
-			Message:   message, Read: read == 1, CreatedAt: parseTime(createdAt).UTC(),
+			ID: id, ImageID: imageID, ImageName: ns(imageName), Reference: ns(reference),
+			OldDigest: ns(oldDigest), NewDigest: ns(newDigest),
+			OldTag: ns(oldTag), NewTag: ns(newTag), LatestTag: ns(latestTag),
+			Type:    models.NotificationKind(typ),
+			Message: ns(message), Read: read == 1, CreatedAt: parseTime(createdAt).UTC(),
 		})
 	}
 	return out, rows.Err()

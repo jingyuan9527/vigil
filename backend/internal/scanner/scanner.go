@@ -240,11 +240,25 @@ func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) 
 		// 去重闸门：常规扫描下同一 digest 只通知一次（防刷屏）。
 		// 强制扫描（「全部重新扫描」）语义为重新广播：无论历史是否通知过、
 		// 用户是否已读，只要存在版本差异就再次通知（系统 + 钉钉）。
-		if shouldNotify && (!notified || force) {
+		willNotify := shouldNotify && (!notified || force)
+		// 存量通知回填：latest_tag 是后加列，历史 update 通知没有版本号，
+		// 页面会退化成无信息量的回退文案。仅当该镜像确有缺值行时才判定（补全后不再触发），
+		// 命中才请求 tags/list 并回填，不给常规扫描增加额外开销。
+		backfillNeeded := false
+		if b, berr := s.store.HasNotificationMissingLatestTag(img.ID); berr == nil {
+			backfillNeeded = b
+		}
+		// latestTag：尽力查出仓库远端版本号最高的 tag（如 v1.4.1），供新通知与存量回填使用；
+		// tags/list 不可用或仓库无版本 tag 时为空，提醒内容跳过该行，不影响通知本身。
+		var latestTag string
+		if willNotify || backfillNeeded {
+			latestTag = s.latestRemoteVersionTag(ctx, ref)
+		}
+		if backfillNeeded && latestTag != "" {
+			_, _ = s.store.BackfillNotificationLatestTag(img.ID, latestTag)
+		}
+		if willNotify {
 			old := baseline
-			// 尽力查出仓库远端版本号最高的 tag（如 v1.4.1）附在提醒里，方便一眼看到新版本号；
-			// tags/list 不可用或仓库无版本 tag 时为空，提醒内容跳过该行，不影响通知本身。
-			latestTag := s.latestRemoteVersionTag(ctx, ref)
 			msg := fmt.Sprintf("镜像 %s 检测到新版本（远端摘要已变更）", j.reference)
 			_ = s.store.CreateNotification(&models.Notification{
 				ImageID:   img.ID,

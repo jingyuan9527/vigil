@@ -395,3 +395,60 @@ func TestListNotificationsNullLatestTag(t *testing.T) {
 		t.Fatalf("got %+v, want 1 row with empty LatestTag", list)
 	}
 }
+
+// TestBackfillNotificationLatestTag 验证存量回填：latest_tag 为空的 update 通知
+// 被补上最新版本号，已有值不被覆盖，new-tag 通知不受影响。
+func TestBackfillNotificationLatestTag(t *testing.T) {
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	img := &models.Image{Name: "library/redis", Reference: "redis:8.4.0",
+		Source: "manual", Status: models.StatusUnknown, CreatedAt: time.Now()}
+	if err := s.UpsertImage(img); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, _ := s.GetImageByRef("redis:8.4.0")
+
+	insert := func(typ, latest string) {
+		if _, err := s.db.Exec(
+			`INSERT INTO notifications (image_id,image_name,reference,old_tag,new_tag,latest_tag,type,message,read,created_at)
+			 VALUES (?,?,?,?,?,?,?,?,0,?)`,
+			got.ID, "library/redis", "redis:8.4.0", "8.4.0", "8.4.0", latest, typ, "m", nowStr()); err != nil {
+			t.Fatalf("insert %s/%q: %v", typ, latest, err)
+		}
+	}
+	insert("update", "")      // 缺值：应被回填
+	insert("update", "")      // 缺值：应被回填
+	insert("update", "8.2.0") // 已有值：不应被覆盖
+	insert("new-tag", "")     // 非 update：不参与回填
+
+	need, err := s.HasNotificationMissingLatestTag(got.ID)
+	if err != nil || !need {
+		t.Fatalf("HasNotificationMissingLatestTag = (%v, %v), want (true, nil)", need, err)
+	}
+	n, err := s.BackfillNotificationLatestTag(got.ID, "8.10.1")
+	if err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("backfilled rows = %d, want 2", n)
+	}
+	if need, _ := s.HasNotificationMissingLatestTag(got.ID); need {
+		t.Fatal("still reports missing after backfill")
+	}
+
+	list, lerr := s.ListNotifications(false, 0)
+	if lerr != nil {
+		t.Fatalf("ListNotifications: %v", lerr)
+	}
+	dist := map[string]int{}
+	for _, x := range list {
+		if x.Type == models.NotifUpdate {
+			dist[x.LatestTag]++
+		}
+	}
+	if dist["8.10.1"] != 2 || dist["8.2.0"] != 1 {
+		t.Fatalf("latest_tag distribution = %+v, want 2x8.10.1 + 1x8.2.0", dist)
+	}
+}
