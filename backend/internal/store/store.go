@@ -65,7 +65,7 @@ func migrate(db *sql.DB) error {
 		new_digest  TEXT,
 		old_tag     TEXT,
 		new_tag     TEXT,
-		latest_tag  TEXT,
+		latest_tag  TEXT NOT NULL DEFAULT '',
 		type        TEXT NOT NULL DEFAULT 'update',
 		message     TEXT,
 		read        INTEGER NOT NULL DEFAULT 0,
@@ -123,7 +123,10 @@ func migrate(db *sql.DB) error {
 	_ = addColumnIfMissing(db, "images", "ignored", "INTEGER NOT NULL DEFAULT 0")
 	_ = addColumnIfMissing(db, "images", "mode", "TEXT NOT NULL DEFAULT 'auto'")
 	_ = addColumnIfMissing(db, "notifications", "type", "TEXT NOT NULL DEFAULT 'update'")
-	_ = addColumnIfMissing(db, "notifications", "latest_tag", "TEXT")
+	_ = addColumnIfMissing(db, "notifications", "latest_tag", "TEXT NOT NULL DEFAULT ''")
+	// 回填：早期版本以可空方式加过该列，存量行值为 NULL，统一归一为空串
+	// （读取侧另有 NullString 兜底，此处保证数据整洁）。
+	_, _ = db.Exec(`UPDATE notifications SET latest_tag='' WHERE latest_tag IS NULL`)
 	// 去重基线回填：存量 update 通知导入独立去重表（(image_id,digest) 主键 + OR IGNORE 幂等），
 	// 保证清理历史后常规扫描不会对已通知过的 digest 重复告警。
 	_, _ = db.Exec(

@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+
 	"vigil/internal/models"
 )
 
@@ -144,12 +146,14 @@ func (s *Store) ListNotifications(unreadOnly bool, cursorID int64) ([]models.Not
 	var out []models.Notification
 	for rows.Next() {
 		var (
-			id                                                            int64
-			imageID                                                       int64
-			imageName, reference                                          string
-			oldDigest, newDigest, oldTag, newTag, latestTag, typ, message string
-			read                                                          int
-			createdAt                                                     string
+			id                                                 int64
+			imageID                                            int64
+			imageName, reference                               string
+			oldDigest, newDigest, oldTag, newTag, typ, message string
+			// latestTag 是后加的列：存量行值为 NULL，必须用 NullString 承接（NULL -> ""）。
+			latestTag sql.NullString
+			read      int
+			createdAt string
 		)
 		if err := rows.Scan(&id, &imageID, &imageName, &reference, &oldDigest, &newDigest,
 			&oldTag, &newTag, &latestTag, &typ, &message, &read, &createdAt); err != nil {
@@ -158,7 +162,7 @@ func (s *Store) ListNotifications(unreadOnly bool, cursorID int64) ([]models.Not
 		out = append(out, models.Notification{
 			ID: id, ImageID: imageID, ImageName: imageName, Reference: reference,
 			OldDigest: oldDigest, NewDigest: newDigest, OldTag: oldTag, NewTag: newTag,
-			LatestTag: latestTag,
+			LatestTag: ns(latestTag),
 			Type:      models.NotificationKind(typ),
 			Message:   message, Read: read == 1, CreatedAt: parseTime(createdAt).UTC(),
 		})

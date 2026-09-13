@@ -355,3 +355,43 @@ func TestFirstVersionDigest(t *testing.T) {
 		t.Fatalf("with empty digest row = %q, want sha256:r1", d)
 	}
 }
+
+// TestListNotificationsNullLatestTag 回归用例：latest_tag 是后加列，
+// 早期部署里以可空方式加列，存量行值为 NULL。读取必须安全降级为空串，
+// 而不是 "converting NULL to string is unsupported" 打挂 /api/notifications。
+func TestListNotificationsNullLatestTag(t *testing.T) {
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	img := &models.Image{Name: "library/nginx", Reference: "nginx:latest",
+		Source: "manual", Status: models.StatusUnknown, CreatedAt: time.Now()}
+	if err := s.UpsertImage(img); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, _ := s.GetImageByRef("nginx:latest")
+
+	// 还原旧库状态：建表时的 DEFAULT '' 会掩盖问题，故重建为可空列。
+	if _, err := s.db.Exec(`ALTER TABLE notifications DROP COLUMN latest_tag`); err != nil {
+		t.Fatalf("drop column: %v", err)
+	}
+	if _, err := s.db.Exec(`ALTER TABLE notifications ADD COLUMN latest_tag TEXT`); err != nil {
+		t.Fatalf("add nullable column: %v", err)
+	}
+	// 存量行：不写 latest_tag，落库即为 NULL
+	if _, err := s.db.Exec(
+		`INSERT INTO notifications (image_id,image_name,reference,old_digest,new_digest,old_tag,new_tag,type,message,read,created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,0,?)`,
+		got.ID, "library/nginx", "nginx:latest", "sha256:old", "sha256:new",
+		"latest", "latest", "update", "legacy", nowStr()); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+
+	list, err := s.ListNotifications(false, 0)
+	if err != nil {
+		t.Fatalf("ListNotifications with NULL latest_tag: %v", err)
+	}
+	if len(list) != 1 || list[0].LatestTag != "" {
+		t.Fatalf("got %+v, want 1 row with empty LatestTag", list)
+	}
+}
