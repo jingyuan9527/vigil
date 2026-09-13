@@ -19,7 +19,8 @@ env:
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
-  # 质量门禁：镜像构建前的强制检查，不过不产出镜像
+  # 质量门禁：后端静态检查与竞态测试。前端编译由 build job 的镜像构建承担（同一份前端产物不再构建两遍），
+  # 因此这里不再前置阻塞 build——两者并行，门禁结果由 merge job 决定是否放行正式标签。
   test:
     runs-on: ubuntu-latest
     steps:
@@ -42,20 +43,13 @@ jobs:
         working-directory: backend
         run: go test -race ./...
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Frontend build
-        working-directory: frontend
-        run: npm ci && npm run build
-
+  # 镜像构建：与 test 并行，多架构镜像先以「未打标签的 digest」推入 GHCR。
+  # 正式标签留给 merge job，故门禁未通过时不会产出可用的 latest/edge——
+  # 代价是失败时会残留一个无标签 digest（不占用任何标签，可被 registry 清理）。
   build:
-    needs: test
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -89,14 +83,56 @@ jobs:
             type=semver,pattern={{major}}
             type=sha
 
-      - name: Build and push
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # 非 PR：输出到 registry 的未打标签 digest（push-by-digest 不能与 tags 同用）；
+          # PR：表达式为空即不导出，只做构建校验。两种情形都无需 push 输入，避免 --push 与 --output 冲突。
+          outputs: "${{ github.event_name != 'pull_request' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || '' }}"
+
+  # 打标签：门禁与构建双双通过后，把 build job 的 digest 提升为正式标签。
+  # 单源且源本身是 manifest list，imagetools 会做 carbon copy（不展开、不嵌套平台条目）。
+  merge:
+    needs: [test, build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=edge,enable={{is_default_branch}}
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+
+      - name: Create manifest list and push
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            ${{ env.IMAGE }}@${{ needs.build.outputs.digest }}
+
+      - name: Inspect image
+        run: docker buildx imagetools inspect ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}

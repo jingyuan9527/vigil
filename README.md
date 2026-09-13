@@ -232,13 +232,15 @@ cd frontend && npm install && npm run dev
 
 ## 多架构镜像与版本
 
-项目通过 GitHub Actions（[`.github/workflows/build.yml`](.github/workflows/build.yml)）自动构建 `linux/amd64` 与 `linux/arm64` 双架构镜像并推送至 GHCR（QEMU + Buildx 跨架构，复用 Actions 缓存；推送至 GHCR 无需额外配置，`GITHUB_TOKEN` 自动授权）：
+项目通过 GitHub Actions（[`.github/workflows/build.yml`](.github/workflows/build.yml)）自动构建 `linux/amd64` 与 `linux/arm64` 双架构镜像并推送至 GHCR（Buildx 构建：前端与 Go 阶段固定在构建机架构上原生执行、Go 用 `GOARCH` 交叉编译，仅运行镜像按目标架构拉取，避免 QEMU 模拟编译；复用 Actions 缓存；推送至 GHCR 无需额外配置，`GITHUB_TOKEN` 自动授权）：
 
 | 触发 | 产出标签 | 用途 |
 |------|----------|------|
 | push `v1.2.3` 标签 | `1.2.3`、`1.2`、`1`、`latest` | 稳定版 / 锁定大版本 / 回滚 |
 | push 到 `main` | `edge`、`sha-xxxx` | 开发版尝鲜 |
 | Pull Request | 不推送，仅构建校验 | — |
+
+流水线分三个 job：质量门禁（`gofmt` / `go vet` / `go test -race`）与镜像构建**并行**执行，构建先把双架构镜像以未打标签的 digest 推入 GHCR，由第三个 job 在门禁与构建双双通过后才创建上表标签——既不串行等待，门禁失败也不会产出可用的 `latest` / `edge`（仅残留一个无标签 digest，不占用任何标签）。`main` 分支与 PR 的前端编译由镜像构建统一承担，不在门禁里重复一遍。
 
 版本号按 [RULES.md](RULES.md) 的语义化版本规则由提交内容自动推导（feat → 次版本，fix → 修订号，破坏性变更 → 主版本）。推荐生产环境锁定大版本，自动获取补丁：
 

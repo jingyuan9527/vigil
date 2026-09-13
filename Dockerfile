@@ -1,24 +1,36 @@
 # syntax=docker/dockerfile:1
 
+# 构建阶段全部固定在构建机架构（$BUILDPLATFORM）上原生执行：
+# 前端产物与 CPU 架构无关，Go 又可用 GOARCH 交叉编译，只有最终运行镜像才需要按目标架构拉取。
+# 这样可避免 npm / go 在 arm64 下走 QEMU 模拟——这是多架构构建最大的耗时来源。
+
 # ---------- 阶段 1：构建前端 ----------
-FROM node:20-alpine AS frontend
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend
 WORKDIR /app/frontend
-COPY frontend/package.json ./
-RUN npm install
+# 只拷依赖清单：改源码不会令依赖安装层失效
+COPY frontend/package.json frontend/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY frontend/ ./
 RUN npm run build
 
 # ---------- 阶段 2：构建后端（静态二进制） ----------
-FROM golang:1.25-alpine AS backend
-# 使用国内模块代理，确保在 CN 网络下 go mod tidy / go build 可稳定拉取依赖
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS backend
+ARG TARGETARCH
+# 使用国内模块代理，确保在 CN 网络下 go mod download / go build 可稳定拉取依赖
 ENV GOPROXY=https://goproxy.cn,direct
 WORKDIR /src
+# 只拷依赖清单：改源码不会令依赖下载层失效
+COPY backend/go.mod backend/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY backend/ ./
-# go mod tidy 会自动解析并锁定 modernc.org/sqlite 及其依赖与正确版本
-RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -o /out/vigil ./cmd/server
+# GOARCH 交叉编译出目标架构二进制，无需 QEMU；构建缓存挂载让重复构建免于全量重编
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/vigil ./cmd/server
 
 # ---------- 阶段 3：运行镜像 ----------
 FROM alpine:3.20
+# 仅本阶段按目标架构执行（arm64 走 QEMU），只装两个小包，代价可忽略
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=backend /out/vigil /app/vigil

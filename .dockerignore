@@ -4,6 +4,8 @@ backend/bin
 .git
 .gitignore
 *.md
+# 文档与截图不参与构建，剔除以缩小构建上下文
+docs
 Dockerfile
 docker-compose.yml
 .dockerignore
