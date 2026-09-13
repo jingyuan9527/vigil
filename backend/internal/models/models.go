@@ -62,9 +62,12 @@ type Notification struct {
 	NewDigest string           `json:"new_digest"`
 	OldTag    string           `json:"old_tag"`
 	NewTag    string           `json:"new_tag"`
-	Message   string           `json:"message"`
-	Read      bool             `json:"read"`
-	CreatedAt time.Time        `json:"created_at"`
+	// LatestTag 是检测时仓库远端版本号最高的 tag（如 v1.27.1），供页面直观展示版本号；
+	// tags/list 不可用或仓库无版本 tag 时为空。
+	LatestTag string    `json:"latest_tag"`
+	Message   string    `json:"message"`
+	Read      bool      `json:"read"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Scan 是一次扫描任务的记录。

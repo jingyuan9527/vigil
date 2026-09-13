@@ -254,6 +254,7 @@ func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) 
 				NewDigest: remote,
 				OldTag:    ref.Tag,
 				NewTag:    ref.Tag,
+				LatestTag: latestTag,
 				Type:      models.NotifUpdate,
 				Message:   msg,
 			})

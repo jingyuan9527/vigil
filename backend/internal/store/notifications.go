@@ -37,10 +37,10 @@ func (s *Store) CreateNotification(n *models.Notification) error {
 	}
 	defer tx.Rollback()
 	if _, err := tx.Exec(
-		`INSERT INTO notifications (image_id,image_name,reference,old_digest,new_digest,old_tag,new_tag,type,message,read,created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,0,?)`,
+		`INSERT INTO notifications (image_id,image_name,reference,old_digest,new_digest,old_tag,new_tag,latest_tag,type,message,read,created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,0,?)`,
 		n.ImageID, n.ImageName, n.Reference, n.OldDigest, n.NewDigest,
-		n.OldTag, n.NewTag, string(typ), n.Message, nowStr()); err != nil {
+		n.OldTag, n.NewTag, n.LatestTag, string(typ), n.Message, nowStr()); err != nil {
 		return err
 	}
 	if typ == models.NotifUpdate && n.NewDigest != "" {
@@ -115,7 +115,7 @@ func (s *Store) AutoReadAchievedNotifications() (int64, error) {
 
 // ListNotifications 按创建时间倒序列出通知（每页上限 100），支持未读筛选与游标分页。
 func (s *Store) ListNotifications(unreadOnly bool, cursorID int64) ([]models.Notification, error) {
-	q := `SELECT id,image_id,image_name,reference,old_digest,new_digest,old_tag,new_tag,type,message,read,created_at
+	q := `SELECT id,image_id,image_name,reference,old_digest,new_digest,old_tag,new_tag,latest_tag,type,message,read,created_at
 	      FROM notifications`
 	where := ""
 	if unreadOnly {
@@ -144,22 +144,23 @@ func (s *Store) ListNotifications(unreadOnly bool, cursorID int64) ([]models.Not
 	var out []models.Notification
 	for rows.Next() {
 		var (
-			id                                                 int64
-			imageID                                            int64
-			imageName, reference                               string
-			oldDigest, newDigest, oldTag, newTag, typ, message string
-			read                                               int
-			createdAt                                          string
+			id                                                            int64
+			imageID                                                       int64
+			imageName, reference                                          string
+			oldDigest, newDigest, oldTag, newTag, latestTag, typ, message string
+			read                                                          int
+			createdAt                                                     string
 		)
 		if err := rows.Scan(&id, &imageID, &imageName, &reference, &oldDigest, &newDigest,
-			&oldTag, &newTag, &typ, &message, &read, &createdAt); err != nil {
+			&oldTag, &newTag, &latestTag, &typ, &message, &read, &createdAt); err != nil {
 			return nil, err
 		}
 		out = append(out, models.Notification{
 			ID: id, ImageID: imageID, ImageName: imageName, Reference: reference,
 			OldDigest: oldDigest, NewDigest: newDigest, OldTag: oldTag, NewTag: newTag,
-			Type:    models.NotificationKind(typ),
-			Message: message, Read: read == 1, CreatedAt: parseTime(createdAt).UTC(),
+			LatestTag: latestTag,
+			Type:      models.NotificationKind(typ),
+			Message:   message, Read: read == 1, CreatedAt: parseTime(createdAt).UTC(),
 		})
 	}
 	return out, rows.Err()

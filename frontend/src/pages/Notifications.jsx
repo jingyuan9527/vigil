@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { api, fmtShort, shortDigest, SCAN_DONE_EVENT } from '../api/client'
+import { api, fmtShort, SCAN_DONE_EVENT } from '../api/client'
 import BentoCard from '../components/BentoCard'
 import Spinner from '../components/Spinner'
 import Pagination from '../components/Pagination'
@@ -396,12 +396,13 @@ function NotifGroup({ group, page, collapsed, onToggle, onPage, onMarkRead }) {
                           <span className="text-zinc-300 dark:text-zinc-600">→</span>
                           <span className="font-medium text-blue-600 dark:text-blue-300">{n.new_tag}</span>
                         </>
-                      ) : (
+                      ) : n.latest_tag ? (
                         <>
-                          <span title={n.old_digest}>{shortDigest(n.old_digest)}</span>
-                          <span className="text-zinc-300 dark:text-zinc-600">→</span>
-                          <span title={n.new_digest}>{shortDigest(n.new_digest)}</span>
+                          <span>最新版本</span>
+                          <span className="font-medium text-amber-600 dark:text-amber-300" title={n.latest_tag}>{n.latest_tag}</span>
                         </>
+                      ) : (
+                        <span title={`${n.old_digest || '—'} → ${n.new_digest || '—'}`}>有新版本</span>
                       )}
                     </div>
                   </div>
