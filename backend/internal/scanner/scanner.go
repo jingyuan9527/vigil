@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -57,12 +58,13 @@ func (s *Scanner) notifyUpdate(ref, oldDigest, newDigest, latestTag string) {
 }
 
 // notifyNewTag 异步扇出「可选更新」（新版本标签）通知到所有启用渠道。
-func (s *Scanner) notifyNewTag(ref, curTag, newTag string) {
+// aliases 是同 digest 的其余别名 tag，随主 tag 一并展示。
+func (s *Scanner) notifyNewTag(ref, curTag, newTag string, aliases []string) {
 	channels, err := s.store.ListChannels(true)
 	if err != nil || len(channels) == 0 {
 		return
 	}
-	msg := notification.NewTagMessage(ref, curTag, newTag)
+	msg := notification.NewTagMessage(ref, curTag, newTag, aliases)
 	s.fanout(channels, msg, "new-tag", ref)
 }
 
@@ -291,7 +293,9 @@ func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) 
 // inspectTags 巡检仓库标签列表（仅 Pin-Watch 模式）：
 //
 //	首次巡检把全部标签记为已见并建立基线（不通知）；
-//	之后出现从未见过的版本 tag → 每个 tag 生成一条 type=new-tag 通知（每个 tag 仅一次），
+//	之后出现从未见过的版本 tag → 按远端 digest 归并后，每组生成一条 type=new-tag
+//	通知（每个 tag 仅一次）：指向同一镜像（同 digest）的多个别名 tag 合并为一条，
+//	主 tag 取版本号最高者，其余列在括号里，避免同一版本被重复提醒；
 //	并把新 tag 记入已见清单；非版本标签也记为已见但不会触发通知。
 //	force=true（「全部重新扫描」）时按版本号比对整个 tag 列表：存在比当前锁定 tag
 //	更高的版本 → 重播最新一个的 new-tag 通知，无视已见基线与历史通知（基线吞掉的
@@ -337,64 +341,143 @@ func (s *Scanner) inspectTags(ctx context.Context, img *models.Image, force bool
 			_ = s.store.AddSeenTags(img.ID, unseen)
 		}
 
-		for _, nt := range freshVersionTags {
-			msg := fmt.Sprintf("仓库 %s 发布新版本标签 %s（当前锁定 %s）", img.Name, nt, img.Tag)
+		// 同一远端镜像常被上游打多个别名 tag（如 0.31 与 0.31.0 同 digest）：
+		// 按 digest 归并为一组，只发一条通知，主 tag 取版本最高者、其余列别名，
+		// 避免同一版本被重复提醒。
+		groups := s.groupNewTagsByDigest(ctx, img, freshVersionTags)
+		for _, g := range groups {
+			label := notification.FormatNewerTag(g.primary, g.aliases)
+			msg := fmt.Sprintf("仓库 %s 发布新版本标签 %s（当前锁定 %s）", img.Name, label, img.Tag)
 			_ = s.store.CreateNotification(&models.Notification{
 				ImageID:   img.ID,
 				ImageName: img.Name,
 				Reference: img.Reference,
 				OldTag:    img.Tag,
-				NewTag:    nt,
+				NewTag:    g.primary,
 				Type:      models.NotifNewTag,
 				Message:   msg,
 			})
-			s.notifyNewTag(img.Reference, img.Tag, nt)
+			s.notifyNewTag(img.Reference, img.Tag, g.primary, g.aliases)
 		}
-		found = len(freshVersionTags) > 0
+		found = len(groups) > 0
 	}
 
 	// 强制扫描重播：取比锁定 tag 更新的最高版本 tag；已在本次通知过则跳过。
 	if force {
-		if best := latestNewerVersionTag(tags, img.Tag); best != "" && !fresh[best] {
-			msg := fmt.Sprintf("强制扫描：仓库 %s 已存在更高版本标签 %s（当前锁定 %s）", img.Name, best, img.Tag)
-			_ = s.store.CreateNotification(&models.Notification{
-				ImageID:   img.ID,
-				ImageName: img.Name,
-				Reference: img.Reference,
-				OldTag:    img.Tag,
-				NewTag:    best,
-				Type:      models.NotifNewTag,
-				Message:   msg,
-			})
-			s.notifyNewTag(img.Reference, img.Tag, best)
-			found = true
+		if groups := s.groupNewTagsByDigest(ctx, img, newerVersionTags(tags, img.Tag)); len(groups) > 0 {
+			best := groups[0] // 已按版本新→旧排序，首个即最高版本
+			if !fresh[best.primary] {
+				label := notification.FormatNewerTag(best.primary, best.aliases)
+				msg := fmt.Sprintf("强制扫描：仓库 %s 已存在更高版本标签 %s（当前锁定 %s）", img.Name, label, img.Tag)
+				_ = s.store.CreateNotification(&models.Notification{
+					ImageID:   img.ID,
+					ImageName: img.Name,
+					Reference: img.Reference,
+					OldTag:    img.Tag,
+					NewTag:    best.primary,
+					Type:      models.NotifNewTag,
+					Message:   msg,
+				})
+				s.notifyNewTag(img.Reference, img.Tag, best.primary, best.aliases)
+				found = true
+			}
 		}
 	}
 	return found
 }
 
-// latestNewerVersionTag 在仓库 tag 列表中找版本号高于 pinned 的最高版本 tag；
-// pinned 或候选无法解析为版本号时不算（浮动/描述性 tag 无大小语义）。
-func latestNewerVersionTag(tags []string, pinned string) string {
+// tagDigestGroup 是一组指向同一远端 manifest 的版本 tag：primary 为主展示 tag
+// （组内版本号最高者），aliases 为其余同 digest 别名 tag。
+type tagDigestGroup struct {
+	primary string
+	aliases []string
+}
+
+// groupNewTagsByDigest 把一组新出现的版本 tag 按远端 manifest digest 归并：
+// 指向同一镜像的多个别名 tag 合并为一组，选版本最高者作代表、其余作别名，
+// 避免同一版本被多个标签重复提醒。digest 取不到（网络/权限/接口禁用）时该
+// tag 单独成组，保证不丢提醒也不误并。结果按代表 tag 版本新→旧排序。
+func (s *Scanner) groupNewTagsByDigest(ctx context.Context, img *models.Image, tags []string) []tagDigestGroup {
+	if len(tags) == 0 {
+		return nil
+	}
+	if len(tags) == 1 {
+		return []tagDigestGroup{{primary: tags[0]}}
+	}
+
+	type lookup struct {
+		tag string
+		dig string
+		ok  bool
+	}
+	results := make([]lookup, len(tags))
+	sem := make(chan struct{}, 6)
+	var wg sync.WaitGroup
+	for i, t := range tags {
+		wg.Add(1)
+		go func(i int, t string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			dig, err := s.registry().ManifestDigest(dctx, registry.ImageRef{Registry: img.Registry, Repo: img.Name, Tag: t})
+			results[i] = lookup{tag: t, dig: dig, ok: err == nil && dig != ""}
+		}(i, t)
+	}
+	wg.Wait()
+
+	byDigest := map[string][]string{}
+	order := make([]string, 0, len(tags))
+	for _, r := range results {
+		key := r.dig
+		if !r.ok {
+			key = "tag:" + r.tag // 取不到 digest：单独成组，避免与未知项误并
+		}
+		if _, seen := byDigest[key]; !seen {
+			order = append(order, key)
+		}
+		byDigest[key] = append(byDigest[key], r.tag)
+	}
+
+	groups := make([]tagDigestGroup, 0, len(order))
+	for _, key := range order {
+		ts := byDigest[key]
+		primary := version.BestTag(ts)
+		if primary == "" {
+			primary = ts[0]
+		}
+		aliases := make([]string, 0, len(ts)-1)
+		for _, t := range ts {
+			if t != primary {
+				aliases = append(aliases, t)
+			}
+		}
+		version.SortTags(aliases)
+		groups = append(groups, tagDigestGroup{primary: primary, aliases: aliases})
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		return version.CompareTag(groups[i].primary, groups[j].primary) > 0
+	})
+	return groups
+}
+
+// newerVersionTags 返回仓库 tag 列表中版本号高于 pinned 的全部 tag；
+// pinned 无法解析为版本号时返回空（浮动/描述性 tag 无大小语义）。
+func newerVersionTags(tags []string, pinned string) []string {
 	curNums, ok := version.ParseTag(pinned)
 	if !ok {
-		return ""
+		return nil
 	}
-	best := ""
+	var out []string
 	for _, t := range tags {
 		n, ok := version.ParseTag(t)
 		if !ok || version.Compare(n, curNums) <= 0 {
 			continue
 		}
-		if best == "" {
-			best = t
-			continue
-		}
-		if bestNums, ok := version.ParseTag(best); ok && version.Compare(n, bestNums) > 0 {
-			best = t
-		}
+		out = append(out, t)
 	}
-	return best
+	return out
 }
 
 // latestRemoteVersionTag 尽力返回仓库远端版本号最高的 tag（如 v1.4.1）。

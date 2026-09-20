@@ -67,7 +67,7 @@ func TestWebhookProviderText(t *testing.T) {
 	url, get, cleanup := captureRequest(t)
 	defer cleanup()
 	cfg, _ := json.Marshal(map[string]string{"url": url, "format": "text"})
-	msg := NewTagMessage("nginx:latest", "8.4.5", "9.0.0")
+	msg := NewTagMessage("nginx:latest", "8.4.5", "9.0.0", nil)
 	if err := (webhookProvider{}).Send(context.Background(), string(cfg), msg); err != nil {
 		t.Fatalf("webhook text send: %v", err)
 	}
@@ -189,9 +189,13 @@ func TestMessageBuilders(t *testing.T) {
 	if !strings.Contains(u.Markdown, "**最新Tag**: `v1.4.1`") || !strings.Contains(u.Text, "最新Tag: v1.4.1") {
 		t.Errorf("update message missing tag line: %+v", u)
 	}
-	nt := NewTagMessage("postgres:15", "15", "16")
+	nt := NewTagMessage("postgres:15", "15", "16", nil)
 	if !strings.Contains(nt.Markdown, "**可选新版本**: `16`") || !strings.Contains(nt.Text, "可选新版本: 16") {
 		t.Errorf("newtag message missing tag: %+v", nt)
+	}
+	aliased := NewTagMessage("neosmemo/memos:0.30.0", "0.30.0", "0.31.0", []string{"0.31"})
+	if !strings.Contains(aliased.Markdown, "**可选新版本**: `0.31.0(0.31)`") || !strings.Contains(aliased.Text, "可选新版本: 0.31.0(0.31)") {
+		t.Errorf("aliased newtag label mismatch: %+v", aliased)
 	}
 	if tm := TestMessage(); tm.Title == "" || tm.Markdown == "" || tm.Text == "" {
 		t.Errorf("test message incomplete: %+v", tm)

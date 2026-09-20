@@ -2,6 +2,7 @@ package notification
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -45,8 +46,11 @@ func UpdateMessage(imageRef, oldDigest, newDigest, latestTag string) Message {
 }
 
 // NewTagMessage 构建「可选更新」（出现更高独立版本 tag）弱提醒。
-func NewTagMessage(imageRef, currentTag, newerTag string) Message {
+// aliases 是同一远端镜像（同 digest）的其余别名 tag，展示时并入括号，
+// 避免同一版本被多个标签重复提醒；为空则与老格式一致。
+func NewTagMessage(imageRef, currentTag, newerTag string, aliases []string) Message {
 	now := time.Now().Format("2006-01-02 15:04:05")
+	label := FormatNewerTag(newerTag, aliases)
 	return Message{
 		Title: "Vigil 可选新版本提醒",
 		Markdown: fmt.Sprintf(
@@ -56,7 +60,7 @@ func NewTagMessage(imageRef, currentTag, newerTag string) Message {
 				"**可选新版本**: `%s`\n\n"+
 				"**说明**: 检测到仓库存在更高版本（如大版本升级），当前仍在监控旧版本，可按需升级。\n\n"+
 				"**时间**: %s\n",
-			imageRef, currentTag, newerTag, now),
+			imageRef, currentTag, label, now),
 		Text: fmt.Sprintf(
 			"⭐ 镜像出现更新的独立版本\n\n"+
 				"镜像: %s\n\n"+
@@ -64,8 +68,24 @@ func NewTagMessage(imageRef, currentTag, newerTag string) Message {
 				"可选新版本: %s\n\n"+
 				"说明: 检测到仓库存在更高版本（如大版本升级），当前仍在监控旧版本，可按需升级。\n\n"+
 				"时间: %s\n",
-			imageRef, currentTag, newerTag, now),
+			imageRef, currentTag, label, now),
 	}
+}
+
+// maxTagAliases 是展示同 digest 别名 tag 的最大个数，超出折叠为「…等N个」，
+// 避免一个镜像挂几十个别名时消息行无限长。
+const maxTagAliases = 4
+
+// FormatNewerTag 把主版本 tag 与同 digest 别名合并展示为 `主(别名, 别名…)`；
+// 无别名时原样返回。别名超过 maxTagAliases 个时截断并附「…等N个」。
+func FormatNewerTag(tag string, aliases []string) string {
+	if len(aliases) == 0 {
+		return tag
+	}
+	if len(aliases) <= maxTagAliases {
+		return fmt.Sprintf("%s(%s)", tag, strings.Join(aliases, ", "))
+	}
+	return fmt.Sprintf("%s(%s, …等%d个)", tag, strings.Join(aliases[:maxTagAliases], ", "), len(aliases))
 }
 
 // TestMessage 构建渠道连通性测试消息。

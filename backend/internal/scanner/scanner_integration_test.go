@@ -58,6 +58,47 @@ func newFakeRegistry(t *testing.T, repo, tag, digest string, tags []string) (*re
 	return registry.NewClientWithMirrorAndHTTP(true, host, regHTTP), srv, &manifestCalls, &tagsCalls
 }
 
+// newFakeRegistryMulti 构造按 tag 返回不同 manifest digest、并暴露完整 tag 列表的
+// 伪造 registry，用于验证「同 digest 别名合并」。
+func newFakeRegistryMulti(t *testing.T, repo string, digests map[string]string, tags []string) (*registry.Client, *httptest.Server) {
+	t.Helper()
+	var srvURL string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"token": "fake-token"})
+	})
+	mux.HandleFunc("/v2/"+repo+"/manifests/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.Header().Set("WWW-Authenticate",
+				`Bearer realm="`+srvURL+`/token",service="registry.docker.io",scope="repository:`+repo+`:pull"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		tag := strings.TrimPrefix(r.URL.Path, "/v2/"+repo+"/manifests/")
+		dig, ok := digests[tag]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Docker-Content-Digest", "sha256:"+dig)
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/v2/"+repo+"/tags/list", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.Header().Set("WWW-Authenticate",
+				`Bearer realm="`+srvURL+`/token",service="registry.docker.io",scope="repository:`+repo+`:pull"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"name": repo, "tags": tags})
+	})
+	srv := httptest.NewServer(mux)
+	srvURL = srv.URL
+	host := strings.TrimPrefix(srv.URL, "http://")
+	regHTTP := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	return registry.NewClientWithMirrorAndHTTP(true, host, regHTTP), srv
+}
+
 // newFakeDocker 构造一个伪造 Docker 守护进程，上报给定引用（裸引用，如 "mysql:8"，
 // 与真实 Docker 的 RepoTags 一致）及其本地摘要。RepoDigests 用裸仓库名。
 func newFakeDocker(t *testing.T, ref, localDigest string) (*docker.Client, *httptest.Server) {
@@ -223,6 +264,59 @@ func TestPinWatchBaselineThenNewTag(t *testing.T) {
 	n4 := newTagNotifs()
 	if len(n4) != 3 {
 		t.Fatalf("scan4 new-tag notifs total = %d, want 3 (1+2 new)", len(n4))
+	}
+}
+
+// TestPinWatchSameDigestAliasesMerged 验证同 digest 别名合并：
+// 0.31 与 0.31.0 指向同一 manifest → 合并为一条通知，主 tag 取版本更高的
+// 0.31.0、别名 0.31 展示在括号里；0.31.0-rc.2 是不同 digest → 单独一条。
+func TestPinWatchSameDigestAliasesMerged(t *testing.T) {
+	digests := map[string]string{
+		"0.30.0":      "aaaaaa",
+		"0.31":        "bbbbbb",
+		"0.31.0":      "bbbbbb",
+		"0.31.0-rc.2": "cccccc",
+	}
+	reg, regSrv := newFakeRegistryMulti(t, "neosmemo/memos", digests, []string{"0.30.0"})
+	defer regSrv.Close()
+	dcli, dockerSrv := newFakeDocker(t, "neosmemo/memos:0.30.0", "aaaaaa")
+	defer dockerSrv.Close()
+
+	st, _ := store.Open(":memory:")
+	cfg := &config.Config{DefaultWatch: []string{"neosmemo/memos:0.30.0"}, DisableDefault: false}
+	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false))
+
+	sc.Run(context.Background(), false) // 首扫：建立 seen 基线
+
+	// 第二轮：新增 0.31 / 0.31.0（同 digest）与 0.31.0-rc.2（异 digest）
+	reg2, regSrv2 := newFakeRegistryMulti(t, "neosmemo/memos", digests,
+		[]string{"0.30.0", "0.31", "0.31.0", "0.31.0-rc.2"})
+	defer regSrv2.Close()
+	sc.SetRegistry(reg2)
+	sc.Run(context.Background(), false)
+
+	all, _ := st.ListNotifications(false, 0)
+	byTag := map[string]models.Notification{}
+	for _, n := range all {
+		if n.Type == models.NotifNewTag {
+			byTag[n.NewTag] = n
+		}
+	}
+	if len(byTag) != 2 {
+		t.Fatalf("new-tag notifs = %d, want 2 (merged aliases + rc): %+v", len(byTag), byTag)
+	}
+	merged, ok := byTag["0.31.0"]
+	if !ok {
+		t.Fatalf("missing merged notif with primary 0.31.0: %+v", byTag)
+	}
+	if !strings.Contains(merged.Message, "0.31.0(0.31)") {
+		t.Errorf("merged message missing alias: %q", merged.Message)
+	}
+	if _, ok := byTag["0.31.0-rc.2"]; !ok {
+		t.Errorf("missing rc notif (different digest must stay separate): %+v", byTag)
+	}
+	if _, ok := byTag["0.31"]; ok {
+		t.Errorf("alias 0.31 must be merged, not a standalone notif: %+v", byTag)
 	}
 }
 

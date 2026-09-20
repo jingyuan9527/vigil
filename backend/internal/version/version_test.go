@@ -63,6 +63,46 @@ func TestLatestTag(t *testing.T) {
 	}
 }
 
+func TestBestTag(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want string
+	}{
+		{"同版本缺段补全者优先", []string{"0.31", "0.31.0"}, "0.31.0"},
+		{"同版本正式版优先于预发布", []string{"0.31.0-rc.2", "0.31.0"}, "0.31.0"},
+		{"非同版本取更高者", []string{"8.4.8", "9.0.0", "8.5.0"}, "9.0.0"},
+		{"忽略浮动标签", []string{"latest", "8.4.7", "dev"}, "8.4.7"},
+		{"全不可解析返回空", []string{"latest", "lts"}, ""},
+		{"空输入返回空", nil, ""},
+	}
+	for _, c := range cases {
+		if got := BestTag(c.in); got != c.want {
+			t.Errorf("%s: BestTag(%v) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}
+
+func TestSortTags(t *testing.T) {
+	in := []string{"latest", "0.31", "0.31.0-rc.2", "0.31.0", "1.0.0", "dev"}
+	SortTags(in)
+	want := []string{"1.0.0", "0.31.0", "0.31", "0.31.0-rc.2", "dev", "latest"}
+	for i := range want {
+		if in[i] != want[i] {
+			t.Fatalf("SortTags = %v, want %v", in, want)
+		}
+	}
+}
+
+func TestCompareTag(t *testing.T) {
+	if got := CompareTag("0.31", "0.31.0"); got != 0 {
+		t.Errorf("CompareTag(0.31,0.31.0) = %d, want 0", got)
+	}
+	if got := CompareTag("0.31", "latest"); got == 0 {
+		t.Errorf("CompareTag(0.31,latest) = 0, want non-zero (string fallback)")
+	}
+}
+
 func TestCompare(t *testing.T) {
 	cases := []struct {
 		a, b string
