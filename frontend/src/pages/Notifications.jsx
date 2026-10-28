@@ -8,7 +8,7 @@ import ConfirmDialog from '../components/ConfirmDialog'
 import ErrorState from '../components/ErrorState'
 import { useToast } from '../components/Toast'
 
-const PAGE_SIZE = 8
+const PAGE_SIZE = 6 // 每组单页条数：调小让两栏更容易都走分页，避免等高布局下大片留白
 
 // 状态筛选：全部展示已读/未读/已忽略，未读与已忽略可单独查看。
 const FILTERS = [
@@ -16,6 +16,37 @@ const FILTERS = [
   { key: 'unread', label: '未读' },
   { key: 'ignored', label: '已忽略' },
 ]
+
+// 两栏分组：同一镜像只进一栏。最近一次提醒是「新 tag」→ 可选更新；
+// 摘要变化 / 仅有可升级版本 → 有新版本。
+const GROUPS = [
+  {
+    key: 'update',
+    title: '有新版本',
+    desc: '同一标签的摘要已变化，或存在更高版本可升级',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 2v8" /><path d="m8 6 4-4 4 4" /><circle cx="12" cy="15" r="6" /><path d="M12 12v6" />
+      </svg>
+    ),
+    iconCls: 'bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-300',
+    countCls: 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
+  },
+  {
+    key: 'new-tag',
+    title: '可选更新',
+    desc: '仓库最近提醒了新的版本标签（可能来自其它分支）',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="9" /><path d="M12 8v4" /><path d="M12 16h.01" />
+      </svg>
+    ),
+    iconCls: 'bg-blue-100 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300',
+    countCls: 'bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300',
+  },
+]
+
+const groupKeyOf = (n) => (n.new_tags && n.new_tags.length > 0 ? 'new-tag' : 'update')
 
 const REASON_LABEL = {
   digest: '摘要变更',
@@ -30,7 +61,8 @@ export default function Notifications() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [filter, setFilter] = useState('all')
-  const [page, setPage] = useState(1)
+  const [pages, setPages] = useState({ update: 1, 'new-tag': 1 }) // 两栏独立分页
+  const [collapsed, setCollapsed] = useState({ update: false, 'new-tag': false }) // 两栏独立折叠
   const [scanning, setScanning] = useState(false)
   const [confirmRescan, setConfirmRescan] = useState(false)
   const pollRef = useRef(null) // 强制扫描轮询器：登记到 ref 供卸载清理
@@ -64,9 +96,9 @@ export default function Notifications() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 切换筛选后回到第一页
+  // 切换筛选后两栏都回到第 1 页
   useEffect(() => {
-    setPage(1)
+    setPages({ update: 1, 'new-tag': 1 })
   }, [filter])
 
   // 状态变更先落库再改本地：失败时提示并保留原状态（下轮扫描会纠正）。
@@ -160,16 +192,16 @@ export default function Notifications() {
   const unread = items.filter((i) => i.status === 'unread').length
   const ignored = items.filter((i) => i.status === 'ignored').length
   const filtered = items.filter((i) => filter === 'all' || i.status === filter)
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const cur = Math.min(page, totalPages)
-  const pageItems = filtered.slice((cur - 1) * PAGE_SIZE, cur * PAGE_SIZE)
+  // 同一镜像只进一栏：最近一次提醒带 new_tags → 可选更新，否则归入有新版本
+  const groups = GROUPS.map((g) => ({ ...g, list: filtered.filter((n) => groupKeyOf(n) === g.key) }))
 
-  const goPage = (p) => {
-    setPage(p)
+  const goPage = (key) => (p) => {
+    setPages((prev) => ({ ...prev, [key]: p }))
     requestAnimationFrame(() => {
       document.querySelector('.notif-list-top')?.scrollIntoView({ block: 'start', behavior: 'smooth' })
     })
   }
+  const toggleGroup = (key) => setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }))
 
   return (
     <div className="notif-list-top flex h-full flex-col overflow-hidden gap-4">
@@ -177,7 +209,7 @@ export default function Notifications() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 md:text-3xl">更新通知</h1>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            按镜像聚合展示：当前监控版本与仓库最新版本对照，同一版本只提醒一次。
+            按优先级分两栏：有新版本（摘要变化/可升级）与可选更新（新 tag），同一镜像只出现一次。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
@@ -256,22 +288,22 @@ export default function Notifications() {
             </p>
           </BentoCard>
         ) : (
-          <BentoCard className="overflow-hidden">
-            <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
-              {pageItems.map((n) => (
-                <UpdateRow key={n.image_id} item={n} onRead={markRead} onIgnore={ignore} onUnignore={unignore} />
-              ))}
-            </ul>
-            <div className="border-t border-zinc-100 px-4 py-2.5 dark:border-zinc-800">
-              {filtered.length > PAGE_SIZE ? (
-                <Pagination page={cur} total={filtered.length} pageSize={PAGE_SIZE} onChange={goPage} />
-              ) : (
-                <p className="flex h-10 items-center justify-center text-xs text-zinc-400 dark:text-zinc-500">
-                  共 {filtered.length} 条 · 单页展示
-                </p>
-              )}
-            </div>
-          </BentoCard>
+          /* 两栏等高：同一镜像只进一栏，各组独立折叠 + 分页 */
+          <div className="grid gap-6 lg:grid-cols-2">
+            {groups.map((g) => (
+              <NotifGroup
+                key={g.key}
+                group={g}
+                page={pages[g.key]}
+                collapsed={collapsed[g.key]}
+                onToggle={() => toggleGroup(g.key)}
+                onPage={goPage(g.key)}
+                onRead={markRead}
+                onIgnore={ignore}
+                onUnignore={unignore}
+              />
+            ))}
+          </div>
         )}
       </div>
 
@@ -287,6 +319,81 @@ export default function Notifications() {
         onCancel={() => setConfirmRescan(false)}
       />
     </div>
+  )
+}
+
+/* 单个分栏：组头（图标/标题/计数/折叠）+ 行式列表 + 独立分页。
+   两栏在宽屏等高，折叠后缩回自身内容高度，避免拉伸成空白大卡。 */
+function NotifGroup({ group, page, collapsed, onToggle, onPage, onRead, onIgnore, onUnignore }) {
+  const total = group.list.length
+  const unread = group.list.filter((n) => n.status === 'unread').length
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const cur = Math.min(page, totalPages)
+  const pageItems = group.list.slice((cur - 1) * PAGE_SIZE, cur * PAGE_SIZE)
+
+  return (
+    <section
+      className={`flex flex-col overflow-hidden rounded-2xl border border-zinc-100 bg-white dark:border-zinc-800 dark:bg-zinc-900 ${
+        collapsed ? 'self-start' : ''
+      }`}
+    >
+      <button
+        onClick={onToggle}
+        aria-expanded={!collapsed}
+        className="flex w-full shrink-0 items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-zinc-50 md:px-5 dark:hover:bg-zinc-800/50"
+      >
+        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${group.iconCls}`}>{group.icon}</span>
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{group.title}</span>
+            <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${group.countCls}`}>{total}</span>
+            {unread > 0 && (
+              <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                未读 {unread}
+              </span>
+            )}
+          </span>
+          <span className="mt-0.5 block truncate text-[11px] text-zinc-400 dark:text-zinc-500">{group.desc}</span>
+        </span>
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={`shrink-0 text-zinc-400 transition-transform ${collapsed ? '-rotate-90' : ''}`}
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+
+      {!collapsed &&
+        (total === 0 ? (
+          <div className="flex flex-1 items-center justify-center border-t border-zinc-100 px-4 py-8 text-sm text-zinc-400 dark:border-zinc-800 dark:text-zinc-500">
+            本栏暂无更新
+          </div>
+        ) : (
+          <>
+            <ul className="flex-1 divide-y divide-zinc-100 dark:divide-zinc-800">
+              {pageItems.map((n) => (
+                <UpdateRow key={n.image_id} item={n} onRead={onRead} onIgnore={onIgnore} onUnignore={onUnignore} />
+              ))}
+            </ul>
+            <div className="border-t border-zinc-100 px-4 py-2.5 dark:border-zinc-800">
+              {total > PAGE_SIZE ? (
+                <Pagination page={cur} total={total} pageSize={PAGE_SIZE} onChange={onPage} />
+              ) : (
+                <p className="flex h-10 items-center justify-center text-xs text-zinc-400 dark:text-zinc-500">
+                  共 {total} 条 · 单页展示
+                </p>
+              )}
+            </div>
+          </>
+        ))}
+    </section>
   )
 }
 
