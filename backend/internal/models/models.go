@@ -104,7 +104,8 @@ type ImageUpdate struct {
 	BaseDigest     string            `json:"base_digest"`     // 差异基线（本地持有摘要；纯远端监控为上次记录）
 	LatestVersion  string            `json:"latest_version"`  // 仓库最高版本号 tag，取不到时为空
 	Candidates     []string          `json:"candidates"`      // 高于当前版本的候选版本，去重并按版本降序
-	HasUpdate      bool              `json:"has_update"`      // 当前是否存在待处理差异（无差异的记录不展示）
+	NewTags        []string          `json:"new_tags"`        // 最近一次提醒中仓库新发布的版本 tag（含低版本/其它分支）
+	HasUpdate      bool              `json:"has_update"`      // 当前是否存在待处理差异（无差异的已读记录不展示）
 	Status         ImageUpdateStatus `json:"status"`
 	IgnoredVersion string            `json:"ignored_version,omitempty"` // 被忽略的版本号（忽略到下一个版本）
 	IgnoredDigest  string            `json:"ignored_digest,omitempty"`  // 无版本号仓库按摘要忽略

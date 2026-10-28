@@ -191,6 +191,12 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 		_ = s.store.AddVersion(img.ID, remote, ref.Tag)
 	}
 
+	// Pin-Watch 需要上一轮聚合记录：已通过「可选新版本」提醒过的更高版本不再重复播报。
+	var prevUpdate *models.ImageUpdate
+	if effective == models.ModePinWatch {
+		prevUpdate, _ = s.store.GetImageUpdate(img.ID)
+	}
+
 	found := false
 	if rerr == nil && remote != "" {
 		// 差异基线（old 即「用户当前持有的」摘要）：
@@ -208,9 +214,10 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 		// 存储层沿用上轮版本，避免接口抖动被误判成版本变化。
 		needVersionInfo := effective == models.ModePinWatch || (digestNotifiable && changed)
 		var (
-			latestVersion string
-			candidates    []string
-			versionKnown  bool
+			latestVersion  string
+			candidates     []string
+			newVersionTags []string
+			versionKnown   bool
 		)
 		if needVersionInfo {
 			tags, terr := s.listTags(ctx, ref)
@@ -223,10 +230,26 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 				// 选展示优先级更高（段数更全）的那个，页面/通知里的版本号更明确。
 				latestVersion = version.BestTag(tags)
 				candidates = candidateVersions(tags, ref.Tag, effective == models.ModePinWatch)
+				if effective == models.ModePinWatch {
+					var notified []string
+					if prevUpdate != nil {
+						notified = prevUpdate.Candidates
+					}
+					// 「可选新版本」语义：仓库任何新出现的版本 tag（含低版本/其它分支）
+					// 都提醒一次；已见标签基线负责跨轮去重。
+					newVersionTags = s.collectNewVersionTags(img.ID, tags, notified)
+				}
 			}
 		}
 
-		msg := notification.UpdateSummaryMessage(j.reference, ref.Tag, baseline, remote, latestVersion, candidates)
+		// 恢复旧版「⭐ 镜像出现更新的独立版本 / 可选新版本」文案：本轮有新 tag 时
+		// 用该模板（多 tag 合并为一条），纯摘要变化仍用聚合摘要模板。
+		var msg notification.Message
+		if len(newVersionTags) > 0 {
+			msg = notification.NewTagSummaryMessage(j.reference, ref.Tag, newVersionTags)
+		} else {
+			msg = notification.UpdateSummaryMessage(j.reference, ref.Tag, baseline, remote, latestVersion, candidates)
+		}
 		rec, notify, uerr := s.store.MergeImageUpdate(store.UpdateInput{
 			ImageID:          img.ID,
 			ImageName:        ref.Repo,
@@ -237,6 +260,7 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 			LatestVersion:    latestVersion,
 			VersionKnown:     versionKnown,
 			Candidates:       candidates,
+			NewVersionTags:   newVersionTags,
 			DigestNotifiable: digestNotifiable,
 			Message:          msg.Text,
 		})
@@ -247,7 +271,12 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 			// 推送历史留档：按触发原因落 type，页面主数据仍是聚合记录。
 			typ := models.NotifUpdate
 			newTag := ref.Tag
-			if rec.Reason == models.UpdateReasonVersion {
+			switch {
+			case len(newVersionTags) > 0:
+				// 优先记录本轮新出现的版本 tag（可能是低版本分支补丁）。
+				typ = models.NotifNewTag
+				newTag = newVersionTags[0]
+			case rec.Reason == models.UpdateReasonVersion:
 				typ = models.NotifNewTag
 				newTag = rec.LatestVersion
 				if newTag == "" && len(rec.Candidates) > 0 {
@@ -297,6 +326,61 @@ func candidateVersions(tags []string, current string, pinWatch bool) []string {
 		out = append(out, t)
 	}
 	return version.DedupTags(out)
+}
+
+// collectNewVersionTags 维护 Pin-Watch 的已见标签基线，返回本轮首次出现的版本 tag：
+//   - 首次巡检（已见表为空）：把当前全部 tag 记为基线，不提醒（与旧版一致）；
+//   - 之后任何未见的版本 tag 都算「新发布」，高版本与低版本/其它分支补丁都提醒；
+//   - 已进入聚合记录候选列表的更高版本会被剔除，避免 v1.7.0 升级或回填时重复提醒。
+//
+// 已见标签表（image_seen_tags）从旧版本延续，升级后仍能准确判断「哪些是新 tag」。
+func (s *Scanner) collectNewVersionTags(imageID int64, tags, notified []string) []string {
+	seen, err := s.store.GetSeenTags(imageID)
+	if err != nil {
+		log.Printf("load seen tags for image %d: %v", imageID, err)
+		return nil
+	}
+	if len(seen) == 0 {
+		if err := s.store.AddSeenTags(imageID, tags); err != nil {
+			log.Printf("init seen tags for image %d: %v", imageID, err)
+		}
+		return nil
+	}
+
+	unseen := make([]string, 0, len(tags))
+	versionTags := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if seen[t] {
+			continue
+		}
+		unseen = append(unseen, t)
+		if _, ok := version.ParseTag(t); ok {
+			versionTags = append(versionTags, t)
+		}
+	}
+	if len(unseen) > 0 {
+		if err := s.store.AddSeenTags(imageID, unseen); err != nil {
+			log.Printf("record seen tags for image %d: %v", imageID, err)
+		}
+	}
+	if len(versionTags) == 0 {
+		return nil
+	}
+
+	alreadyNotified := make(map[string]bool, len(notified))
+	for _, t := range notified {
+		alreadyNotified[t] = true
+	}
+	fresh := make([]string, 0, len(versionTags))
+	for _, t := range version.DedupTags(versionTags) {
+		if !alreadyNotified[t] {
+			fresh = append(fresh, t)
+		}
+	}
+	if len(fresh) == 0 {
+		return nil
+	}
+	return fresh
 }
 
 // listTags 拉取仓库 tag 列表：5s 超时兜底，失败由调用方决定降级策略。

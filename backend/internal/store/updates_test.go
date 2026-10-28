@@ -187,6 +187,53 @@ func TestMergeImageUpdateVersionUnknownKeepsState(t *testing.T) {
 	}
 }
 
+// TestMergeImageUpdateNewVersionTag 覆盖「低版本/其它分支新 tag 也提醒」：
+// 即使没有可升级差异，也会产生未读记录，且已读后才从列表隐藏。
+func TestMergeImageUpdateNewVersionTag(t *testing.T) {
+	s, _ := Open(":memory:")
+	in := UpdateInput{
+		ImageID: 11, ImageName: "library/redis", Reference: "redis:8.4.8-alpine",
+		CurrentVersion: "8.4.8-alpine", CurrentDigest: "d1", BaseDigest: "d1",
+		LatestVersion: "8.4.8-alpine", VersionKnown: true,
+	}
+	mergeUpdate(t, s, in) // 基线
+
+	in.NewVersionTags = []string{"7.4.12-alpine"}
+	rec, notify := mergeUpdate(t, s, in)
+	if !notify {
+		t.Fatal("new lower version tag must notify")
+	}
+	if rec.Status != models.UpdateUnread || rec.Reason != models.UpdateReasonVersion {
+		t.Errorf("record = %+v, want unread/version", rec)
+	}
+	if rec.HasUpdate {
+		t.Error("lower branch tag is not an upgrade diff, has_update should be false")
+	}
+	if len(rec.NewTags) != 1 || rec.NewTags[0] != "7.4.12-alpine" {
+		t.Errorf("new tags = %v, want [7.4.12-alpine]", rec.NewTags)
+	}
+	// 无差异但未读 → 页面仍可见、计入未读
+	if list, _ := s.ListImageUpdates(""); len(list) != 1 {
+		t.Errorf("unread record hidden from list: %+v", list)
+	}
+	if n, _ := s.UnreadUpdateCount(); n != 1 {
+		t.Errorf("unread count = %d, want 1", n)
+	}
+
+	// 同一 tag 重复提交不重复提醒
+	if _, notify = mergeUpdate(t, s, in); notify {
+		t.Error("same new tag must not notify twice")
+	}
+
+	// 已读且无差异 → 列表隐藏（一次性的可选版本提醒）
+	if err := s.MarkImageUpdateRead(11); err != nil {
+		t.Fatalf("mark read: %v", err)
+	}
+	if list, _ := s.ListImageUpdates(""); len(list) != 0 {
+		t.Errorf("read record with no diff still listed: %+v", list)
+	}
+}
+
 // TestMergeImageUpdateVersionBaseline 覆盖 tags/list 恢复时的基线补建：
 // 上轮拿不到版本信息、本轮首次拿到时只记基线，不把仓库既有版本刷屏；
 // 而「上轮已确认仓库无版本 tag、本轮发布了首个版本」应正常提醒。

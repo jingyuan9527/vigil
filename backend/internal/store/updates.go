@@ -28,7 +28,10 @@ type UpdateInput struct {
 	// VersionKnown 表示本轮成功拿到 tags/list：false 时沿用已存版本信息，
 	// 避免仓库接口抖动把版本号清空而误判成「版本变化」。
 	VersionKnown bool
-	Candidates   []string
+	Candidates   []string // 高于当前版本的候选版本（页面「可升级」）
+	// NewVersionTags 是本轮首次出现在仓库中的版本 tag（含低版本/其它分支补丁），
+	// 由扫描器基于已见标签基线计算。非空即触发一次「可选新版本」提醒。
+	NewVersionTags []string
 	// DigestNotifiable 表示当前检测模式需要因摘要变化推送（仅 digest-only/auto 浮动 tag；
 	// Pin-Watch 锁定 tag 被上游覆盖时不告警，与既有语义一致）。
 	DigestNotifiable bool
@@ -55,9 +58,19 @@ func (s *Store) MergeImageUpdate(in UpdateInput) (models.ImageUpdate, bool, erro
 	// 版本信息未知（tags/list 失败）时沿用上轮结果，避免瞬时故障制造假变更。
 	candidates := normalizeCandidates(in.Candidates)
 	latest := in.LatestVersion
+	newTags := normalizeCandidates(in.NewVersionTags)
 	if !in.VersionKnown && prev != nil {
 		candidates = prev.Candidates
 		latest = prev.LatestVersion
+		newTags = nil
+	}
+	if prev != nil && len(newTags) > 0 {
+		// 已进入聚合记录（基线候选或上次已提醒）的版本不再重复播报，
+		// 兜住已见标签表缺失/滞后导致扫描器重复提交的情况。
+		already := make([]string, 0, len(prev.Candidates)+len(prev.NewTags))
+		already = append(already, prev.Candidates...)
+		already = append(already, prev.NewTags...)
+		newTags = excludeTags(newTags, already)
 	}
 
 	now := time.Now().UTC()
@@ -88,6 +101,7 @@ func (s *Store) MergeImageUpdate(in UpdateInput) (models.ImageUpdate, bool, erro
 		rec.FirstSeenAt = prev.FirstSeenAt
 		rec.Status = prev.Status
 		rec.Message = prev.Message
+		rec.NewTags = prev.NewTags
 		rec.Reason = prev.Reason
 		rec.IgnoredVersion = prev.IgnoredVersion
 		rec.IgnoredDigest = prev.IgnoredDigest
@@ -109,7 +123,9 @@ func (s *Store) MergeImageUpdate(in UpdateInput) (models.ImageUpdate, bool, erro
 		appeared := candidatesAppeared(prev.notifiedCandidates, candidates)
 		latestIsNewer := latest != "" && in.CurrentVersion != "" &&
 			version.CompareTag(latest, in.CurrentVersion) > 0
-		versionBumped := !versionBaseline && (appeared ||
+		// 仓库新发布的版本 tag（含低版本/其它分支补丁）同样视为版本变化：
+		// 这是旧版「可选新版本」提醒的语义，不能只盯最高版本号。
+		versionBumped := !versionBaseline && (len(newTags) > 0 || appeared ||
 			(latestIsNewer && (prev.notifiedLatest == "" ||
 				version.CompareTag(latest, prev.notifiedLatest) > 0)))
 
@@ -158,6 +174,8 @@ func (s *Store) MergeImageUpdate(in UpdateInput) (models.ImageUpdate, bool, erro
 	if shouldNotify {
 		rec.Status = models.UpdateUnread
 		rec.Message = in.Message
+		// 只保留本次提醒的新版本；摘要类提醒不携带版本列表。
+		rec.NewTags = newTags
 		rec.IgnoredVersion = ""
 		rec.IgnoredDigest = ""
 		notifiedDigest = in.CurrentDigest
@@ -176,19 +194,28 @@ func (s *Store) MergeImageUpdate(in UpdateInput) (models.ImageUpdate, bool, erro
 	if err != nil {
 		return models.ImageUpdate{}, false, err
 	}
+	storedNewTags := rec.NewTags
+	if storedNewTags == nil {
+		storedNewTags = []string{}
+	}
+	newTagsJSON, err := json.Marshal(storedNewTags)
+	if err != nil {
+		return models.ImageUpdate{}, false, err
+	}
 	if _, err := tx.Exec(
 		`INSERT INTO image_updates (
 		   image_id,image_name,reference,current_version,current_digest,base_digest,
-		   latest_version,candidates,has_update,version_known,status,ignored_version,ignored_digest,
+		   latest_version,candidates,new_tags,has_update,version_known,
+		   status,ignored_version,ignored_digest,
 		   notified_digest,notified_latest,notified_candidates,message,reason,
 		   first_seen_at,last_seen_at,notified_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(image_id) DO UPDATE SET
 		   image_name=excluded.image_name, reference=excluded.reference,
 		   current_version=excluded.current_version, current_digest=excluded.current_digest,
 		   base_digest=excluded.base_digest, latest_version=excluded.latest_version,
-		   candidates=excluded.candidates, has_update=excluded.has_update,
-		   version_known=excluded.version_known,
+		   candidates=excluded.candidates, new_tags=excluded.new_tags,
+		   has_update=excluded.has_update, version_known=excluded.version_known,
 		   status=excluded.status, ignored_version=excluded.ignored_version,
 		   ignored_digest=excluded.ignored_digest, notified_digest=excluded.notified_digest,
 		   notified_latest=excluded.notified_latest, notified_candidates=excluded.notified_candidates,
@@ -196,8 +223,9 @@ func (s *Store) MergeImageUpdate(in UpdateInput) (models.ImageUpdate, bool, erro
 		   first_seen_at=excluded.first_seen_at, last_seen_at=excluded.last_seen_at,
 		   notified_at=excluded.notified_at`,
 		rec.ImageID, rec.ImageName, rec.Reference, rec.CurrentVersion, rec.CurrentDigest,
-		rec.BaseDigest, rec.LatestVersion, string(candidatesJSON), boolToInt(rec.HasUpdate),
-		boolToInt(versionKnown), string(rec.Status), rec.IgnoredVersion, rec.IgnoredDigest,
+		rec.BaseDigest, rec.LatestVersion, string(candidatesJSON), string(newTagsJSON),
+		boolToInt(rec.HasUpdate), boolToInt(versionKnown),
+		string(rec.Status), rec.IgnoredVersion, rec.IgnoredDigest,
 		notifiedDigest, notifiedLatest, string(notifiedJSON), rec.Message, rec.Reason,
 		rec.FirstSeenAt.Format(time.RFC3339), rec.LastSeenAt.Format(time.RFC3339),
 		nullIfEmpty(notifiedAt)); err != nil {
@@ -218,16 +246,18 @@ func (s *Store) GetImageUpdate(imageID int64) (*models.ImageUpdate, error) {
 	return &rec.ImageUpdate, nil
 }
 
-// ListImageUpdates 列出存在实际差异（has_update=1）的聚合记录，按未读优先、
-// 最近检测时间倒序。status 为空表示全部；镜像级 ignored 的项目不展示。
+// ListImageUpdates 列出需要展示的聚合记录，按未读优先、最近检测时间倒序：
+// 存在当前差异（has_update=1）或仍处于未读/已忽略状态。这样「低版本分支新 tag」
+// 这类没有升级差异、但确实发过提醒的条目也不会从页面消失。
+// status 为空表示全部；镜像级 ignored 的项目不展示。
 func (s *Store) ListImageUpdates(status string) ([]models.ImageUpdate, error) {
 	q := `SELECT u.image_id,u.image_name,u.reference,u.current_version,u.current_digest,u.base_digest,
-	             u.latest_version,u.candidates,u.has_update,u.version_known,u.status,
+	             u.latest_version,u.candidates,u.new_tags,u.has_update,u.version_known,u.status,
 	             u.ignored_version,u.ignored_digest,
 	             u.notified_digest,u.notified_latest,u.notified_candidates,u.message,u.reason,
 	             u.first_seen_at,u.last_seen_at,u.notified_at
 	      FROM image_updates u
-	      WHERE u.has_update=1
+	      WHERE (u.has_update=1 OR u.status IN ('unread','ignored'))
 	        AND NOT EXISTS (SELECT 1 FROM images i WHERE i.id=u.image_id AND i.ignored=1)`
 	args := []interface{}{}
 	if status != "" {
@@ -290,7 +320,7 @@ func (s *Store) UnreadUpdateCount() (int, error) {
 	var n int
 	err := s.db.QueryRow(
 		`SELECT COUNT(*) FROM image_updates u
-		 WHERE u.status='unread' AND u.has_update=1
+		 WHERE u.status='unread'
 		   AND NOT EXISTS (SELECT 1 FROM images i WHERE i.id=u.image_id AND i.ignored=1)`).Scan(&n)
 	return n, err
 }
@@ -303,7 +333,9 @@ func (s *Store) UnreadUpdateCount() (int, error) {
 func (s *Store) AutoReadAchievedUpdates() (int64, error) {
 	r1, err := s.db.Exec(`
 		UPDATE image_updates SET status='read'
-		WHERE status='unread' AND latest_version <> '' AND EXISTS (
+		WHERE status='unread' AND latest_version <> ''
+		  AND latest_version <> current_version
+		  AND EXISTS (
 			SELECT 1 FROM images i
 			WHERE i.name = image_updates.image_name
 			  AND i.tag = image_updates.latest_version
@@ -348,7 +380,7 @@ type rowQuerier interface {
 func getImageUpdateTx(q rowQuerier, imageID int64) (*mergedUpdateRow, error) {
 	row := q.QueryRow(
 		`SELECT image_id,image_name,reference,current_version,current_digest,base_digest,
-		        latest_version,candidates,has_update,version_known,status,
+		        latest_version,candidates,new_tags,has_update,version_known,status,
 		        ignored_version,ignored_digest,
 		        notified_digest,notified_latest,notified_candidates,message,reason,
 		        first_seen_at,last_seen_at,notified_at
@@ -361,14 +393,14 @@ func scanImageUpdateRow(sc imageScanner) (*mergedUpdateRow, error) {
 		imageID                                       int64
 		imageName, reference, currentVersion          sql.NullString
 		currentDigest, baseDigest, latestVersion      sql.NullString
-		candidates, status, ignoredVersion            sql.NullString
+		candidates, newTags, status, ignoredVersion   sql.NullString
 		ignoredDigest, notifiedDigest, notifiedLatest sql.NullString
 		notifiedCandidates, message, reason           sql.NullString
 		firstSeenAt, lastSeenAt, notifiedAt           sql.NullString
 		hasUpdate, versionKnown                       int
 	)
 	if err := sc.Scan(&imageID, &imageName, &reference, &currentVersion, &currentDigest,
-		&baseDigest, &latestVersion, &candidates, &hasUpdate, &versionKnown, &status,
+		&baseDigest, &latestVersion, &candidates, &newTags, &hasUpdate, &versionKnown, &status,
 		&ignoredVersion, &ignoredDigest, &notifiedDigest, &notifiedLatest,
 		&notifiedCandidates, &message, &reason, &firstSeenAt, &lastSeenAt,
 		&notifiedAt); err != nil {
@@ -387,6 +419,7 @@ func scanImageUpdateRow(sc imageScanner) (*mergedUpdateRow, error) {
 			BaseDigest:     ns(baseDigest),
 			LatestVersion:  ns(latestVersion),
 			Candidates:     decodeCandidates(ns(candidates)),
+			NewTags:        decodeCandidates(ns(newTags)),
 			HasUpdate:      hasUpdate == 1,
 			Status:         models.ImageUpdateStatus(ns(status)),
 			IgnoredVersion: ns(ignoredVersion),
@@ -434,6 +467,27 @@ func candidatesAppeared(notified, now []string) bool {
 		}
 	}
 	return false
+}
+
+// excludeTags 从 tags 中剔除 already 里已出现过的 tag（按原串比较）。
+func excludeTags(tags, already []string) []string {
+	if len(tags) == 0 || len(already) == 0 {
+		return tags
+	}
+	skip := make(map[string]bool, len(already))
+	for _, t := range already {
+		skip[t] = true
+	}
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if !skip[t] {
+			out = append(out, t)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func computeHasUpdate(currentVersion, currentDigest, baseDigest, latestVersion string, candidates []string) bool {

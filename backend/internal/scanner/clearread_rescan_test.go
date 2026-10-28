@@ -11,6 +11,7 @@ package scanner
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"vigil/internal/config"
@@ -327,6 +328,64 @@ func TestForceRescanNoNewerVersionTagSilent(t *testing.T) {
 	}
 	if rec := updateRecord(t, st, "nginx:8.4.5"); len(rec.Candidates) != 0 {
 		t.Errorf("candidates = %v, want empty (same-version variants excluded)", rec.Candidates)
+	}
+}
+
+// TestLowerVersionTagNotifiesWithLegacyTemplate 回归：低版本/其它分支新 tag 也要提醒。
+// 文案恢复旧版「⭐ 镜像出现更新的独立版本 / 可选新版本」，同一镜像当轮只发一条；
+// 即使没有可升级差异（当前已在最高版本），该未读条目在页面仍可见。
+func TestLowerVersionTagNotifiesWithLegacyTemplate(t *testing.T) {
+	tags := []string{"8.4.8-alpine", "8.4.0", "7.4.12-alpine", "latest"}
+	reg1, regSrv1, _, _ := newFakeRegistry(t, "library/redis", "8.4.8-alpine", "fixeddigest", tags)
+	defer regSrv1.Close()
+
+	st, _ := store.Open(":memory:")
+	cfg := &config.Config{DefaultWatch: []string{"redis:8.4.8-alpine"}, DisableDefault: false}
+	sc := New(cfg, st, nil, reg1, config.NewLiveSettings(3600, false, "", false))
+
+	sc.Run(context.Background(), false) // 首扫建立已见标签基线
+	if got := notifCount(t, st, models.NotifNewTag); got != 0 {
+		t.Fatalf("baseline new-tag notifs = %d, want 0", got)
+	}
+
+	// 仓库发布 7.4 分支补丁 7.4.13-alpine（低于当前 8.4.8）→ 也要提醒
+	reg2, regSrv2, _, _ := newFakeRegistry(t, "library/redis", "8.4.8-alpine", "fixeddigest",
+		append(append([]string{}, tags...), "7.4.13-alpine"))
+	defer regSrv2.Close()
+	sc.SetRegistry(reg2)
+	sc.Run(context.Background(), false)
+
+	if got := notifCount(t, st, models.NotifNewTag); got != 1 {
+		t.Fatalf("lower version tag notifs = %d, want 1", got)
+	}
+	all, _ := st.ListNotifications(false, 0)
+	if all[0].NewTag != "7.4.13-alpine" {
+		t.Errorf("notified tag = %q, want 7.4.13-alpine", all[0].NewTag)
+	}
+	for _, want := range []string{"镜像出现更新的独立版本", "可选新版本", "7.4.13-alpine"} {
+		if !strings.Contains(all[0].Message, want) {
+			t.Errorf("message missing %q: %q", want, all[0].Message)
+		}
+	}
+
+	rec := updateRecord(t, st, "redis:8.4.8-alpine")
+	if rec.Status != models.UpdateUnread {
+		t.Errorf("status = %q, want unread", rec.Status)
+	}
+	if len(rec.NewTags) != 1 || rec.NewTags[0] != "7.4.13-alpine" {
+		t.Errorf("new_tags = %v, want [7.4.13-alpine]", rec.NewTags)
+	}
+	if rec.HasUpdate {
+		t.Error("lower branch tag should not create an upgrade diff")
+	}
+	if list, _ := st.ListImageUpdates(""); len(list) != 1 {
+		t.Errorf("unread lower-tag record not listed: %+v", list)
+	}
+
+	// 相同 tag 下轮不再重复
+	sc.Run(context.Background(), false)
+	if got := notifCount(t, st, models.NotifNewTag); got != 1 {
+		t.Errorf("repeat scan notifs = %d, want 1", got)
 	}
 }
 

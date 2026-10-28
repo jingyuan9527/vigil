@@ -118,6 +118,7 @@ func migrate(db *sql.DB) error {
 		base_digest         TEXT,
 		latest_version      TEXT NOT NULL DEFAULT '',
 		candidates          TEXT NOT NULL DEFAULT '[]',
+		new_tags            TEXT NOT NULL DEFAULT '[]',
 		has_update          INTEGER NOT NULL DEFAULT 0,
 		version_known       INTEGER NOT NULL DEFAULT 0,
 		status              TEXT NOT NULL DEFAULT 'read',
@@ -152,6 +153,7 @@ func migrate(db *sql.DB) error {
 	// image_updates 为本轮新增表；列补充保持幂等，兼容已经建表的开发库。
 	_ = addColumnIfMissing(db, "image_updates", "version_known", "INTEGER NOT NULL DEFAULT 0")
 	_ = addColumnIfMissing(db, "image_updates", "has_update", "INTEGER NOT NULL DEFAULT 0")
+	_ = addColumnIfMissing(db, "image_updates", "new_tags", "TEXT NOT NULL DEFAULT '[]'")
 	// 回填：早期版本以可空方式加过该列，存量行值为 NULL，统一归一为空串
 	// （读取侧另有 NullString 兜底，此处保证数据整洁）。
 	_, _ = db.Exec(`UPDATE notifications SET latest_tag='' WHERE latest_tag IS NULL`)

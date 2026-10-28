@@ -296,6 +296,9 @@ function UpdateRow({ item: n, onRead, onIgnore, onUnignore }) {
   const latestKnown = !!n.latest_version
   const hasNewerVersion = latestKnown && n.latest_version !== n.current_version
   const candidates = n.candidates || []
+  // new_tags 是最近一次「可选新版本」提醒中的新 tag（可能低于当前版本/来自其它分支），
+  // 已出现在候选版本里的不重复展示。
+  const newTags = (n.new_tags || []).filter((t) => !candidates.includes(t))
 
   return (
     <li className={`flex items-start gap-3 px-4 py-3.5 transition-colors hover:bg-zinc-50 md:px-5 dark:hover:bg-zinc-800/50 ${n.status === 'read' ? 'opacity-70' : ''}`}>
@@ -354,6 +357,18 @@ function UpdateRow({ item: n, onRead, onIgnore, onUnignore }) {
             ))}
             {candidates.length > 8 && (
               <span className="text-[11px] text-zinc-400 dark:text-zinc-500">…等 {candidates.length} 个</span>
+            )}
+          </div>
+        )}
+
+        {newTags.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] text-zinc-400 dark:text-zinc-500">可选新版本</span>
+            {newTags.slice(0, 8).map((t) => (
+              <span key={t} className="rounded-md bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">{t}</span>
+            ))}
+            {newTags.length > 8 && (
+              <span className="text-[11px] text-zinc-400 dark:text-zinc-500">…等 {newTags.length} 个</span>
             )}
           </div>
         )}

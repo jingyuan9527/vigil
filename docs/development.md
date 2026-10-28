@@ -59,7 +59,7 @@ backend/internal/store/
   images.go         镜像 CRUD、忽略/模式覆写、本机已删 docker 镜像清理
   versions.go       版本时间线
   seentags.go       pin-watch 已见标签基线（历史兼容，通知去重已由 updates.go 承接）
-  updates.go        按镜像聚合的更新记录：候选版本合并去重、版本变化判定、已读/忽略
+  updates.go        按镜像聚合的更新记录：候选版本/新 tag 合并去重、版本变化判定、已读/忽略
   notifications.go  推送历史 CRUD、自动已读、保留策略
   scans.go          扫描记录与 Stats
   auth.go           管理员账号

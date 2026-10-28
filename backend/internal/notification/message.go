@@ -72,6 +72,33 @@ func NewTagMessage(imageRef, currentTag, newerTag string, aliases []string) Mess
 	}
 }
 
+// NewTagSummaryMessage 构建「⭐ 镜像出现更新的独立版本」提醒：保持旧版文案与字段命名，
+// 便于既有渠道模板与阅读习惯平滑过渡；一个镜像当轮发现的多个新版本 tag 合并为一条，
+// newTags 已去重并按版本号降序（可能包含低版本/其它分支补丁）。
+func NewTagSummaryMessage(imageRef, currentTag string, newTags []string) Message {
+	now := time.Now().Format("2006-01-02 15:04:05")
+	label := FormatCandidates(newTags)
+	return Message{
+		Title: "Vigil 可选新版本提醒",
+		Markdown: fmt.Sprintf(
+			"### ⭐ 镜像出现更新的独立版本\n\n"+
+				"**镜像**: %s\n\n"+
+				"**当前版本**: `%s`\n\n"+
+				"**可选新版本**: `%s`\n\n"+
+				"**说明**: 检测到仓库发布了新的版本标签（可能来自其它分支/版本线），当前仍在监控旧版本，可按需升级或参考。\n\n"+
+				"**时间**: %s\n",
+			imageRef, currentTag, label, now),
+		Text: fmt.Sprintf(
+			"⭐ 镜像出现更新的独立版本\n\n"+
+				"镜像: %s\n\n"+
+				"当前版本: %s\n\n"+
+				"可选新版本: %s\n\n"+
+				"说明: 检测到仓库发布了新的版本标签（可能来自其它分支/版本线），当前仍在监控旧版本，可按需升级或参考。\n\n"+
+				"时间: %s\n",
+			imageRef, currentTag, label, now),
+	}
+}
+
 // UpdateSummaryMessage 构建「按镜像聚合」的更新提醒：同一条消息内给出当前监控版本、
 // 最新版本、候选版本（已去重排序）与摘要变化。一次检测周期内发现的多个候选版本
 // 合并在此一条消息里，避免同一镜像被多条通知拆散。
