@@ -197,13 +197,6 @@ func TestMessageBuilders(t *testing.T) {
 	if !strings.Contains(aliased.Markdown, "**可选新版本**: `0.31.0(0.31)`") || !strings.Contains(aliased.Text, "可选新版本: 0.31.0(0.31)") {
 		t.Errorf("aliased newtag label mismatch: %+v", aliased)
 	}
-	sum := NewTagSummaryMessage("redis:8.4.0", "8.4.0", []string{"8.4.8-alpine", "7.4.12-alpine"})
-	if sum.Title != "Vigil 可选新版本提醒" ||
-		!strings.Contains(sum.Markdown, "镜像出现更新的独立版本") ||
-		!strings.Contains(sum.Markdown, "**可选新版本**: `8.4.8-alpine, 7.4.12-alpine`") ||
-		!strings.Contains(sum.Text, "可选新版本: 8.4.8-alpine, 7.4.12-alpine") {
-		t.Errorf("merged newtag summary mismatch: %+v", sum)
-	}
 	if tm := TestMessage(); tm.Title == "" || tm.Markdown == "" || tm.Text == "" {
 		t.Errorf("test message incomplete: %+v", tm)
 	}

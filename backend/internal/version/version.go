@@ -4,7 +4,6 @@ package version
 
 import (
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -124,47 +123,6 @@ func tagLess(a, b string) bool {
 	default:
 		return a < b
 	}
-}
-
-// VersionKey 返回用于判定「同一版本」的归一键：数字段相同且预发布后缀相同的
-// tag 视为同一版本（0.31 与 0.31.0 等价；0.31.0 与 0.31.0-rc.2 不等价）。
-// 末尾的 0 段按 Compare 的语义归一（8.4 与 8.4.0 等价）；不可解析为版本的
-// tag（latest/lts）退化为原串小写比较。
-func VersionKey(tag string) string {
-	nums, ok := ParseTag(tag)
-	if !ok {
-		return "raw:" + strings.ToLower(strings.TrimSpace(tag))
-	}
-	suffix := ""
-	if i := strings.Index(tag, "-"); i > 0 {
-		suffix = strings.ToLower(tag[i+1:])
-	}
-	for len(nums) > 1 && nums[len(nums)-1] == 0 {
-		nums = nums[:len(nums)-1]
-	}
-	parts := make([]string, 0, len(nums))
-	for _, n := range nums {
-		parts = append(parts, strconv.Itoa(n))
-	}
-	return strings.Join(parts, ".") + "|" + suffix
-}
-
-// DedupTags 去重并按展示优先级（版本号降序）返回：同一版本的别名 tag
-// （如 0.31 与 0.31.0）只保留展示优先级更高者，避免同一版本被重复展示/提醒。
-func DedupTags(tags []string) []string {
-	sorted := append([]string(nil), tags...)
-	SortTags(sorted)
-	out := make([]string, 0, len(sorted))
-	seen := make(map[string]bool, len(sorted))
-	for _, t := range sorted {
-		k := VersionKey(t)
-		if seen[k] {
-			continue
-		}
-		seen[k] = true
-		out = append(out, t)
-	}
-	return out
 }
 
 // Compare 按段比较两个版本序列：a<b 返回 -1，相等返回 0，a>b 返回 1。

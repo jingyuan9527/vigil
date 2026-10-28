@@ -114,9 +114,6 @@ func (s *Store) deleteImageRow(id int64) error {
 	_, _ = s.db.Exec("DELETE FROM image_seen_tags WHERE image_id=?", id)
 	_, _ = s.db.Exec("DELETE FROM image_versions WHERE image_id=?", id)
 	_, _ = s.db.Exec("DELETE FROM image_digest_notified WHERE image_id=?", id)
-	// 聚合更新记录随镜像删除：它保存的是当前状态而非历史，
-	// 重新添加同名引用会从新基线开始（不会因旧记录被吞掉首个提醒）。
-	_, _ = s.db.Exec("DELETE FROM image_updates WHERE image_id=?", id)
 	return nil
 }
 

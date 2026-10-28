@@ -204,11 +204,11 @@ func TestIgnoredSkipsAllDetection(t *testing.T) {
 	}
 }
 
-// TestPinWatchBaselineThenNewTag 验证 Pin-Watch（固定版本 tag）候选版本聚合语义：
-//  1. 首扫建立基线（含已有更高版本），不通知；
-//  2. 仓库不变 → 不重复通知（聚合指纹去重）；
+// TestPinWatchBaselineThenNewTag 验证 Pin-Watch（固定版本 tag）新版本巡检语义：
+//  1. 首扫建立 seen 标签基线（含已有所有版本 tag），不通知；
+//  2. 仓库不变 → 不重复通知（seen 去重）；
 //  3. 仓库新增单个新版本 tag → 一条 type=new-tag 通知；
-//  4. 同一周期再新增两个版本 → 合并为一条通知，候选版本去重排序。
+//  4. 仓库再同时新增两个新版本 tag → 两条通知（每个 tag 仅一次）。
 func TestPinWatchBaselineThenNewTag(t *testing.T) {
 	digest := "c0ffee"
 	allTags := []string{"8.0.36", "8.4.7", "8.4.8", "26", "latest"}
@@ -255,32 +255,21 @@ func TestPinWatchBaselineThenNewTag(t *testing.T) {
 		t.Fatalf("scan3 new-tag notifs = %+v, want one with NewTag=30", n3)
 	}
 
-	// 第四轮：同时新增 8.5.0 与 9.0.0 → 合并为一条（候选版本去重排序）
+	// 第四轮：同时新增两个新版本 8.5.0 与 9.0.0 → 两条（每个 tag 仅一次）
 	allTags3 := append(append([]string{}, allTags2...), "8.5.0", "9.0.0")
 	reg4, regSrv4, _, _ := newFakeRegistry(t, "library/mysql", "8.4.7", digest, allTags3)
 	defer regSrv4.Close()
 	sc.SetRegistry(reg4)
 	sc.Run(context.Background(), false)
 	n4 := newTagNotifs()
-	if len(n4) != 2 {
-		t.Fatalf("scan4 new-tag notifs total = %d, want 2 (1+1 merged)", len(n4))
-	}
-	rec := updateRecord(t, st, "mysql:8.4.7")
-	want := []string{"30", "26", "9.0.0", "8.5.0", "8.4.8"}
-	if len(rec.Candidates) != len(want) {
-		t.Fatalf("candidates = %v, want %v", rec.Candidates, want)
-	}
-	for i := range want {
-		if rec.Candidates[i] != want[i] {
-			t.Fatalf("candidates = %v, want %v", rec.Candidates, want)
-		}
+	if len(n4) != 3 {
+		t.Fatalf("scan4 new-tag notifs total = %d, want 3 (1+2 new)", len(n4))
 	}
 }
 
-// TestPinWatchSameDigestAliasesMerged 验证同版本别名合并：
-// 0.31 与 0.31.0 是同一版本 → 候选列表只留展示优先级更高的 0.31.0；
-// 0.31.0-rc.2 带预发布后缀，是不同版本 → 作为另一候选保留；
-// 三个 tag 同轮出现只发一条通知，不会拆成多条。
+// TestPinWatchSameDigestAliasesMerged 验证同 digest 别名合并：
+// 0.31 与 0.31.0 指向同一 manifest → 合并为一条通知，主 tag 取版本更高的
+// 0.31.0、别名 0.31 展示在括号里；0.31.0-rc.2 是不同 digest → 单独一条。
 func TestPinWatchSameDigestAliasesMerged(t *testing.T) {
 	digests := map[string]string{
 		"0.30.0":      "aaaaaa",
@@ -307,30 +296,27 @@ func TestPinWatchSameDigestAliasesMerged(t *testing.T) {
 	sc.Run(context.Background(), false)
 
 	all, _ := st.ListNotifications(false, 0)
-	var notifs []models.Notification
+	byTag := map[string]models.Notification{}
 	for _, n := range all {
 		if n.Type == models.NotifNewTag {
-			notifs = append(notifs, n)
+			byTag[n.NewTag] = n
 		}
 	}
-	if len(notifs) != 1 {
-		t.Fatalf("new-tag notifs = %d, want 1 (all candidates merged): %+v", len(notifs), notifs)
+	if len(byTag) != 2 {
+		t.Fatalf("new-tag notifs = %d, want 2 (merged aliases + rc): %+v", len(byTag), byTag)
 	}
-	if notifs[0].NewTag != "0.31.0" {
-		t.Errorf("notified version = %q, want 0.31.0", notifs[0].NewTag)
+	merged, ok := byTag["0.31.0"]
+	if !ok {
+		t.Fatalf("missing merged notif with primary 0.31.0: %+v", byTag)
 	}
-	if !strings.Contains(notifs[0].Message, "0.31.0") || !strings.Contains(notifs[0].Message, "0.31.0-rc.2") {
-		t.Errorf("merged message missing candidate versions: %q", notifs[0].Message)
+	if !strings.Contains(merged.Message, "0.31.0(0.31)") {
+		t.Errorf("merged message missing alias: %q", merged.Message)
 	}
-	rec := updateRecord(t, st, "neosmemo/memos:0.30.0")
-	want := []string{"0.31.0", "0.31.0-rc.2"}
-	if len(rec.Candidates) != len(want) {
-		t.Fatalf("candidates = %v, want %v", rec.Candidates, want)
+	if _, ok := byTag["0.31.0-rc.2"]; !ok {
+		t.Errorf("missing rc notif (different digest must stay separate): %+v", byTag)
 	}
-	for i := range want {
-		if rec.Candidates[i] != want[i] {
-			t.Fatalf("candidates = %v, want %v", rec.Candidates, want)
-		}
+	if _, ok := byTag["0.31"]; ok {
+		t.Errorf("alias 0.31 must be merged, not a standalone notif: %+v", byTag)
 	}
 }
 
@@ -359,10 +345,10 @@ func TestRollingTagNoTagInspection(t *testing.T) {
 	}
 }
 
-// TestForceScanPinWatchDigestNotRepeated 验证强制扫描不再重播：
-// Pin-Watch 锁定 tag 的摘要差异仅展示在聚合记录中（锁定语义不告警），
-// 首次扫描与强制扫描都不产生通知。
-func TestForceScanPinWatchDigestNotRepeated(t *testing.T) {
+// TestForceScanBackfillsAndDedups 验证强制扫描：对当前存在版本差异的镜像补发 update 通知，
+// 语义为重新广播——每次强制扫描都会再次通知（不受已读/历史通知影响）。
+// 覆盖 Pin-Watch 锁定 tag 被覆盖的情况。
+func TestForceScanBackfillsAndDedups(t *testing.T) {
 	localDigest := "aaaaaa"
 	remoteDigest := "bbbbbb" // 远端从一开始就与本地不同
 	// tags/list 返回空：Pin-Watch 巡检直接 return，不影响本测试焦点
@@ -375,24 +361,26 @@ func TestForceScanPinWatchDigestNotRepeated(t *testing.T) {
 	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.7"}, DisableDefault: false}
 	sc := New(cfg, st, dcli, reg, config.NewLiveSettings(3600, false, "", false))
 
-	// 常规扫描：Pin-Watch 首扫基线 + local!=remote（首扫 changed=false）→ 不通知
+	// 常规扫描：Pin-Watch 首扫基线 + local!=remote 但 digest 变化非「转移」（changed=false，首扫）→ 不通知
 	sc.Run(context.Background(), false)
 	img, _ := st.GetImageByRef("mysql:8.4.7")
 	if img.Status != models.StatusUpdateAvailable {
 		t.Errorf("status = %q, want update-available (local!=remote)", img.Status)
 	}
-	if u, _ := st.UnreadUpdateCount(); u != 0 {
-		t.Fatalf("unread after routine scan = %d, want 0 (pin-watch baseline)", u)
+	if u, _ := st.UnreadCount(); u != 0 {
+		t.Fatalf("unread after routine scan = %d, want 0 (pin-watch baseline, no transition notify)", u)
 	}
 
-	// 强制扫描：只重新检测，不重复推送
+	// 强制扫描：重新广播语义，存在版本差异即再次通知（无视去重与已读）
 	sc.Run(context.Background(), true)
-	if u, _ := st.UnreadUpdateCount(); u != 0 {
-		t.Errorf("unread after force scan = %d, want 0 (no re-broadcast)", u)
+	if u, _ := st.UnreadCount(); u != 1 {
+		t.Fatalf("unread after force scan = %d, want 1", u)
 	}
-	rec := updateRecord(t, st, "mysql:8.4.7")
-	if !rec.HasUpdate || rec.BaseDigest != localDigest || rec.CurrentDigest != remoteDigest {
-		t.Errorf("record = %+v, want digest diff %s -> %s", rec, localDigest, remoteDigest)
+
+	// 再次强制扫描：强制扫描=重新广播，同一 digest 已通知过也再次通知
+	sc.Run(context.Background(), true)
+	if u, _ := st.UnreadCount(); u != 2 {
+		t.Errorf("unread after second force scan = %d, want 2 (force re-broadcasts)", u)
 	}
 }
 

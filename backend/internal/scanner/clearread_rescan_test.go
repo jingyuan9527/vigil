@@ -1,17 +1,20 @@
 package scanner
 
-// 回归测试（反馈回路）：通知页改为「按镜像聚合」后，去重语义由聚合记录承载。
+// 回归测试（反馈回路）：修复用户报告 ——
+// 「清空历史消息后，点击立即扫描/全部重新扫描，都没有扫出来可选更新的内容」。
 //
-// 用户操作流：产生通知 → 全部已读 → 清空推送历史 → 立即扫描 → 全部重新扫描。
-// 新语义：
-//   - 聚合记录保存「已通知状态」，同一版本/摘要不会重复推送（定时与强制扫描一致）；
-//   - 清空推送历史不影响聚合记录，因此不会因清空历史而重复提醒；
-//   - 版本号（候选版本集合/最高版本）或浮动 tag 摘要实际变化时，才推送一次；
-//   - 接入监控的首次扫描只建立基线，不把仓库既有版本一次性刷屏。
+// 三个子场景分别覆盖三种镜像形态：
+//   W: watch-only 演示镜像（source=manual、无本地摘要、浮动 tag → digest-only）
+//   P: pin-watch 镜像（new-tag「可选更新」弱提醒）
+//   D: docker 本地镜像且当前存在 local!=remote 的活差异（对照组：强制扫描应重新广播）
+//
+// 用户操作流统一为：产生通知 → 全部已读 → 清空已读 → 立即扫描 → 全部重新扫描。
+// 修复后语义：W/D 清空后强制扫描按「从未通知过」从版本时间线重建基线找回提醒；
+// 常规扫描（立即扫描）保持去重基线不重复提醒；P 清空后强制扫描按版本号重播
+// 「更高版本 tag」提醒（方案 B 已实施），常规扫描仍被 seen-tags 基线拦截。
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"vigil/internal/config"
@@ -34,15 +37,10 @@ func notifCount(t *testing.T, st *store.Store, typ models.NotificationKind) int 
 	return n
 }
 
-// clearHistory 模拟用户「全部已读 + 清空已读」：聚合记录转已读（状态保留），
-// 推送历史行删除。聚合去重基线不受影响。
 func clearHistory(t *testing.T, st *store.Store) {
 	t.Helper()
 	if err := st.MarkAllRead(); err != nil {
 		t.Fatalf("mark all read: %v", err)
-	}
-	if err := st.MarkAllImageUpdatesRead(); err != nil {
-		t.Fatalf("mark all updates read: %v", err)
 	}
 	if _, err := st.ClearReadNotifications(); err != nil {
 		t.Fatalf("clear read: %v", err)
@@ -52,22 +50,9 @@ func clearHistory(t *testing.T, st *store.Store) {
 	}
 }
 
-func updateRecord(t *testing.T, st *store.Store, ref string) *models.ImageUpdate {
-	t.Helper()
-	img, err := st.GetImageByRef(ref)
-	if err != nil || img == nil {
-		t.Fatalf("image %s missing: %v", ref, err)
-	}
-	rec, err := st.GetImageUpdate(img.ID)
-	if err != nil || rec == nil {
-		t.Fatalf("update record for %s missing: %v", ref, err)
-	}
-	return rec
-}
-
-// TestDigestTransitionNotifiesOnce 场景 W：watch-only 浮动镜像的摘要转移。
-// 转移只推送一次；清空历史、重复常规扫描与强制扫描都不会重复提醒。
-func TestDigestTransitionNotifiesOnce(t *testing.T) {
+// TestClearReadThenRescanWatchOnly 场景 W：watch-only 镜像（demo watch 列表形态）的
+// digest 转移通知，清空已读后强制扫描按「从未通知过」从版本时间线重建基线重新广播。
+func TestClearReadThenRescanWatchOnly(t *testing.T) {
 	reg1, regSrv1, _, _ := newFakeRegistry(t, "library/nginx", "latest", "r1digest", nil)
 	defer regSrv1.Close()
 
@@ -81,7 +66,7 @@ func TestDigestTransitionNotifiesOnce(t *testing.T) {
 		t.Fatalf("baseline scan notifs = %d, want 0", got)
 	}
 
-	// 远端 latest 被上游重新推送 → 推送一条 update
+	// 远端 latest 被上游重新推送 → 转移扫描产生 update 通知
 	reg2, regSrv2, _, _ := newFakeRegistry(t, "library/nginx", "latest", "r2digest", nil)
 	defer regSrv2.Close()
 	sc.SetRegistry(reg2)
@@ -89,34 +74,40 @@ func TestDigestTransitionNotifiesOnce(t *testing.T) {
 	if got := notifCount(t, st, models.NotifUpdate); got != 1 {
 		t.Fatalf("transition scan notifs = %d, want 1", got)
 	}
-	rec := updateRecord(t, st, "nginx:latest")
-	if rec.BaseDigest != "r1digest" || rec.CurrentDigest != "r2digest" {
-		t.Errorf("record digest = %s -> %s, want r1digest -> r2digest", rec.BaseDigest, rec.CurrentDigest)
-	}
-	if rec.Status != models.UpdateUnread {
-		t.Errorf("record status = %q, want unread", rec.Status)
-	}
 
-	// 相同摘要再扫：不重复
-	sc.Run(context.Background(), false)
-	if got := notifCount(t, st, models.NotifUpdate); got != 1 {
-		t.Errorf("repeat scan notifs = %d, want 1 (same digest)", got)
-	}
-
-	// 用户全部已读 + 清空历史：聚合状态仍在，常规扫描与强制扫描都不重复提醒
+	// 用户：全部已读 + 清空已读
 	clearHistory(t, st)
+
+	// 用户：立即扫描（常规）——去重基线拦截 + 无转移，不重复提醒（清空弹窗承诺的语义）
 	sc.Run(context.Background(), false)
-	sc.Run(context.Background(), true)
 	if got := notifCount(t, st, models.NotifUpdate); got != 0 {
-		t.Errorf("scan after clear-read notifs = %d, want 0 (aggregate dedup)", got)
+		t.Fatalf("regular scan after clear-read notifs = %d, want 0 (dedup preserved)", got)
 	}
-	if rec := updateRecord(t, st, "nginx:latest"); rec.Status != models.UpdateRead {
-		t.Errorf("record status after clear = %q, want read", rec.Status)
+
+	// 用户：全部重新扫描（强制）——重新广播，old 取版本时间线基线
+	sc.Run(context.Background(), true)
+	all, _ := st.ListNotifications(false, 0)
+	if len(all) != 1 {
+		t.Fatalf("force rescan after clear-read notifs = %d, want 1", len(all))
+	}
+	if all[0].OldDigest != "r1digest" || all[0].NewDigest != "r2digest" {
+		t.Errorf("rebroadcast digest = %s -> %s, want r1digest -> r2digest", all[0].OldDigest, all[0].NewDigest)
+	}
+
+	// 再次强制扫描：重新广播语义，每次触发都会再次通知
+	sc.Run(context.Background(), true)
+	if got := notifCount(t, st, models.NotifUpdate); got != 2 {
+		t.Errorf("second force rescan notifs = %d, want 2 (force re-broadcasts every time)", got)
+	}
+
+	if img, _ := st.GetImageByRef("nginx:latest"); img != nil {
+		t.Logf("image status after force rescan = %q（纯远端监控的状态展示语义不在本次修复范围）", img.Status)
 	}
 }
 
-// TestForceScanFreshTransitionWatchOnly 覆盖尚未常规扫描过渡、直接强制扫描的分支：
-// 相对基线确实发生了摘要变化 → 推送一次，而不是按「重新广播」每次触发。
+// TestForceScanFreshTransitionWatchOnly 覆盖强制扫描时远端恰处于「全新转移」的分支
+// （prevRemote != remote，尚未常规扫描过渡）：基线一律取版本时间线最早记录，
+// 广播 old=首次记录、new=当前，保证与清空后再强制扫描的 OldDigest 一致。
 func TestForceScanFreshTransitionWatchOnly(t *testing.T) {
 	reg1, regSrv1, _, _ := newFakeRegistry(t, "library/busybox", "latest", "r1digest", nil)
 	defer regSrv1.Close()
@@ -125,11 +116,13 @@ func TestForceScanFreshTransitionWatchOnly(t *testing.T) {
 	cfg := &config.Config{DefaultWatch: []string{"busybox:latest"}, DisableDefault: false}
 	sc := New(cfg, st, nil, reg1, config.NewLiveSettings(3600, false, "", false))
 
+	// 首扫基线（无通知）
 	sc.Run(context.Background(), false)
 	if got := notifCount(t, st, models.NotifUpdate); got != 0 {
 		t.Fatalf("baseline scan notifs = %d, want 0", got)
 	}
 
+	// 远端转移但尚未常规扫描，直接强制扫描：old 应为首次记录 r1，而非上轮远端
 	reg2, regSrv2, _, _ := newFakeRegistry(t, "library/busybox", "latest", "r2digest", nil)
 	defer regSrv2.Close()
 	sc.SetRegistry(reg2)
@@ -139,18 +132,12 @@ func TestForceScanFreshTransitionWatchOnly(t *testing.T) {
 		t.Fatalf("force scan (fresh transition) notifs = %d, want 1", len(all))
 	}
 	if all[0].OldDigest != "r1digest" || all[0].NewDigest != "r2digest" {
-		t.Errorf("notify digest = %s -> %s, want r1digest -> r2digest", all[0].OldDigest, all[0].NewDigest)
-	}
-
-	// 再次强制扫描：同一状态不重复推送
-	sc.Run(context.Background(), true)
-	if got := notifCount(t, st, models.NotifUpdate); got != 1 {
-		t.Errorf("second force scan notifs = %d, want 1 (dedup)", got)
+		t.Errorf("rebroadcast digest = %s -> %s, want r1digest -> r2digest", all[0].OldDigest, all[0].NewDigest)
 	}
 }
 
-// TestForceScanWatchOnlyNeverMoved 负例：纯远端监控镜像自首次记录以来远端从未变化，
-// 强制扫描没有版本变化，不应产生通知。
+// TestForceScanWatchOnlyNeverMoved 负例：纯远端监控镜像自首次记录以来远端从未变化
+// （时间线只有当前摘要）时，强制扫描没有可广播的转移，不应产生通知。
 func TestForceScanWatchOnlyNeverMoved(t *testing.T) {
 	reg, regSrv, _, _ := newFakeRegistry(t, "library/redis", "latest", "samedigest", nil)
 	defer regSrv.Close()
@@ -166,10 +153,10 @@ func TestForceScanWatchOnlyNeverMoved(t *testing.T) {
 	}
 }
 
-// TestPinWatchCandidatesMergedAndNotifiedOnce 场景 P：Pin-Watch 镜像的候选版本聚合。
-// 同一检测周期内出现的多个更高版本合并为一条通知，候选版本去重排序；
-// 相同候选集合不再重复推送（含强制扫描）。
-func TestPinWatchCandidatesMergedAndNotifiedOnce(t *testing.T) {
+// TestClearReadThenRescanPinWatchNewTag 场景 P：pin-watch 的 new-tag「可选更新」通知，
+// 清空已读后常规扫描不再再生（seen-tags 基线独立于通知历史）；
+// 强制扫描按版本号重播「更高版本 tag」提醒（方案 B 已实施），每次触发都会再次通知。
+func TestClearReadThenRescanPinWatchNewTag(t *testing.T) {
 	tags1 := []string{"8.4.7", "8.4.8", "latest"}
 	reg1, regSrv1, _, _ := newFakeRegistry(t, "library/mysql", "8.4.7", "fixeddigest", tags1)
 	defer regSrv1.Close()
@@ -178,17 +165,13 @@ func TestPinWatchCandidatesMergedAndNotifiedOnce(t *testing.T) {
 	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.7"}, DisableDefault: false}
 	sc := New(cfg, st, nil, reg1, config.NewLiveSettings(3600, false, "", false))
 
-	// 首扫建立基线：已有更高版本只展示，不推送
+	// 首扫建立 seen 基线
 	sc.Run(context.Background(), false)
 	if got := notifCount(t, st, models.NotifNewTag); got != 0 {
 		t.Fatalf("baseline scan new-tag notifs = %d, want 0", got)
 	}
-	rec := updateRecord(t, st, "mysql:8.4.7")
-	if len(rec.Candidates) != 1 || rec.Candidates[0] != "8.4.8" || rec.LatestVersion != "8.4.8" {
-		t.Errorf("baseline record = latest %q candidates %v, want 8.4.8", rec.LatestVersion, rec.Candidates)
-	}
 
-	// 仓库新增 30：候选 [30, 8.4.8]，一条 new-tag 通知
+	// 仓库发布新 tag 30 → new-tag 通知
 	reg2, regSrv2, _, _ := newFakeRegistry(t, "library/mysql", "8.4.7", "fixeddigest", append(tags1, "30"))
 	defer regSrv2.Close()
 	sc.SetRegistry(reg2)
@@ -196,79 +179,69 @@ func TestPinWatchCandidatesMergedAndNotifiedOnce(t *testing.T) {
 	if got := notifCount(t, st, models.NotifNewTag); got != 1 {
 		t.Fatalf("new-tag scan notifs = %d, want 1", got)
 	}
-	rec = updateRecord(t, st, "mysql:8.4.7")
-	if rec.LatestVersion != "30" {
-		t.Errorf("latest version = %q, want 30", rec.LatestVersion)
-	}
-	if len(rec.Candidates) != 2 || rec.Candidates[0] != "30" || rec.Candidates[1] != "8.4.8" {
-		t.Errorf("candidates = %v, want [30 8.4.8] (dedup + desc)", rec.Candidates)
-	}
-	all, _ := st.ListNotifications(false, 0)
-	if len(all) != 1 || all[0].Type != models.NotifNewTag || all[0].NewTag != "30" {
-		t.Fatalf("notification = %+v, want one new-tag with NewTag=30", all)
-	}
 
-	// 相同候选集合：常规扫描与强制扫描都不重复
-	sc.Run(context.Background(), false)
-	sc.Run(context.Background(), true)
-	if got := notifCount(t, st, models.NotifNewTag); got != 1 {
-		t.Errorf("repeat scans notifs = %d, want 1 (same candidate set)", got)
-	}
-
-	// 清空历史后再强制扫描：不重播
+	// 用户：全部已读 + 清空已读，再立即扫描——seen-tags 基线拦截，不重复提醒
 	clearHistory(t, st)
-	sc.Run(context.Background(), true)
+	sc.Run(context.Background(), false)
 	if got := notifCount(t, st, models.NotifNewTag); got != 0 {
-		t.Errorf("force scan after clear-read notifs = %d, want 0", got)
+		t.Fatalf("regular scan after clear-read new-tag notifs = %d, want 0", got)
+	}
+
+	// 全部重新扫描：按版本号重播最高更高版本 30（8.4.8/30 均高于 8.4.7，取 30）
+	sc.Run(context.Background(), true)
+	all, _ := st.ListNotifications(false, 0)
+	if len(all) != 1 {
+		t.Fatalf("force rescan after clear-read new-tag notifs = %d, want 1", len(all))
+	}
+	if all[0].Type != models.NotifNewTag || all[0].OldTag != "8.4.7" || all[0].NewTag != "30" {
+		t.Errorf("rebroadcast = type %q %s -> %s, want new-tag 8.4.7 -> 30", all[0].Type, all[0].OldTag, all[0].NewTag)
+	}
+
+	// 再次强制扫描：重新广播语义，每次触发都会再次通知
+	sc.Run(context.Background(), true)
+	if got := notifCount(t, st, models.NotifNewTag); got != 2 {
+		t.Errorf("second force rescan new-tag notifs = %d, want 2 (force re-broadcasts every time)", got)
 	}
 }
 
-// TestForceScanDigestDiffNotifiesOnce 对照组：浮动 tag 存在 local!=remote 的活差异时，
-// 首次扫描只建立基线；强制扫描不重复；远端再次变化才推送一次。
-func TestForceScanDigestDiffNotifiesOnce(t *testing.T) {
-	reg1, regSrv1, _, _ := newFakeRegistry(t, "library/nginx", "latest", "bbdigest", nil)
+// TestClearReadThenRescanDockerDiff 对照组 D：docker 本地镜像当前存在
+// local!=remote 的活差异时，清空已读后强制扫描应能重新广播（机制本身健康）。
+func TestClearReadThenRescanDockerDiff(t *testing.T) {
+	reg1, regSrv1, _, _ := newFakeRegistry(t, "library/mysql", "8.4.7", "rbdigest", nil)
 	defer regSrv1.Close()
-	dcli, dockerSrv := newFakeDocker(t, "nginx:latest", "aadigest")
+	dcli, dockerSrv := newFakeDocker(t, "mysql:8.4.7", "aadigest")
 	defer dockerSrv.Close()
 
 	st, _ := store.Open(":memory:")
-	cfg := &config.Config{DefaultWatch: []string{"nginx:latest"}, DisableDefault: false}
+	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.7"}, DisableDefault: false}
 	sc := New(cfg, st, dcli, reg1, config.NewLiveSettings(3600, false, "", false))
 
-	// 首扫基线：local!=remote 但无「转移」→ 不通知，聚合记录展示差异
+	// 首扫基线：local!=remote 但 changed=false → 不通知
 	sc.Run(context.Background(), false)
 	if got := notifCount(t, st, models.NotifUpdate); got != 0 {
 		t.Fatalf("baseline scan notifs = %d, want 0", got)
 	}
-	rec := updateRecord(t, st, "nginx:latest")
-	if !rec.HasUpdate || rec.BaseDigest != "aadigest" || rec.CurrentDigest != "bbdigest" {
-		t.Errorf("baseline record = %+v, want live digest diff aa->bb", rec)
-	}
 
-	// 强制扫描：同一摘要不重复
-	sc.Run(context.Background(), true)
-	if got := notifCount(t, st, models.NotifUpdate); got != 0 {
-		t.Fatalf("force scan notifs = %d, want 0 (same state)", got)
-	}
-
-	// 远端再次变化 → 推送一次；再强制扫描不重复
-	reg2, regSrv2, _, _ := newFakeRegistry(t, "library/nginx", "latest", "ccdigest", nil)
-	defer regSrv2.Close()
-	sc.SetRegistry(reg2)
-	sc.Run(context.Background(), false)
-	if got := notifCount(t, st, models.NotifUpdate); got != 1 {
-		t.Fatalf("digest change notifs = %d, want 1", got)
-	}
+	// 强制扫描补发一条，随后用户已读并清空
 	sc.Run(context.Background(), true)
 	if got := notifCount(t, st, models.NotifUpdate); got != 1 {
-		t.Errorf("force scan after digest change notifs = %d, want 1", got)
+		t.Fatalf("force scan notifs = %d, want 1", got)
+	}
+	clearHistory(t, st)
+
+	// 清空后强制扫描：活差异仍在 → 应重新广播
+	sc.Run(context.Background(), true)
+	if got := notifCount(t, st, models.NotifUpdate); got < 1 {
+		t.Errorf("force rescan after clear-read (live diff): update notifs = %d, want >=1", got)
+	} else {
+		t.Logf("[force rescan, live diff] notifs = %d", got)
 	}
 }
 
-// TestBaselineCandidatesVisibleWithoutNotify 用户场景回归：监控 mysql:8.4.5 时
-// 仓库早已存在更高版本（26、8.4.6）。首巡只建立基线不推送，但聚合记录中可见；
-// 新版本出现时才推送一条，候选版本合并排序展示。
-func TestBaselineCandidatesVisibleWithoutNotify(t *testing.T) {
+// TestForceRescanRecoverBaselineSwallowedNewTag 用户场景回归：监控 mysql:8.4.5 时
+// 仓库里早已存在更高版本 tag（26、8.4.6 在首巡基线中被记为已见、从未通知过）。
+// 「全部重新扫描」按版本号比对整个 tag 列表，重播最新的更高版本（26）。
+func TestForceRescanRecoverBaselineSwallowedNewTag(t *testing.T) {
 	tags := []string{"8.4.5", "8.4.6", "26", "latest"}
 	reg, regSrv, _, _ := newFakeRegistry(t, "library/mysql", "8.4.5", "fixeddigest", tags)
 	defer regSrv.Close()
@@ -277,41 +250,38 @@ func TestBaselineCandidatesVisibleWithoutNotify(t *testing.T) {
 	cfg := &config.Config{DefaultWatch: []string{"mysql:8.4.5"}, DisableDefault: false}
 	sc := New(cfg, st, nil, reg, config.NewLiveSettings(3600, false, "", false))
 
+	// 首巡基线吞掉 26/8.4.6，常规扫描保持沉默
 	sc.Run(context.Background(), false)
-	sc.Run(context.Background(), true)
+	sc.Run(context.Background(), false)
 	if got := notifCount(t, st, models.NotifNewTag); got != 0 {
-		t.Fatalf("baseline/force new-tag notifs = %d, want 0", got)
-	}
-	rec := updateRecord(t, st, "mysql:8.4.5")
-	if rec.Status != models.UpdateRead {
-		t.Errorf("baseline status = %q, want read", rec.Status)
-	}
-	if len(rec.Candidates) != 2 || rec.Candidates[0] != "26" || rec.Candidates[1] != "8.4.6" {
-		t.Errorf("baseline candidates = %v, want [26 8.4.6]", rec.Candidates)
+		t.Fatalf("baseline/regular scan new-tag notifs = %d, want 0", got)
 	}
 
-	// 新增 27：一条通知，候选 [27 26 8.4.6]
-	reg2, regSrv2, _, _ := newFakeRegistry(t, "library/mysql", "8.4.5", "fixeddigest", append(tags, "27"))
-	defer regSrv2.Close()
-	sc.SetRegistry(reg2)
-	sc.Run(context.Background(), false)
-	if got := notifCount(t, st, models.NotifNewTag); got != 1 {
-		t.Fatalf("new version notifs = %d, want 1", got)
+	// 全部重新扫描：重播最高更高版本 26
+	sc.Run(context.Background(), true)
+	all, _ := st.ListNotifications(false, 0)
+	if len(all) != 1 {
+		t.Fatalf("force rescan notifs = %d, want 1", len(all))
 	}
-	rec = updateRecord(t, st, "mysql:8.4.5")
-	if len(rec.Candidates) != 3 || rec.Candidates[0] != "27" || rec.Candidates[2] != "8.4.6" {
-		t.Errorf("candidates after 27 = %v, want [27 26 8.4.6]", rec.Candidates)
+	if all[0].Type != models.NotifNewTag || all[0].OldTag != "8.4.5" || all[0].NewTag != "26" {
+		t.Errorf("rebroadcast = type %q %s -> %s, want new-tag 8.4.5 -> 26", all[0].Type, all[0].OldTag, all[0].NewTag)
 	}
 
-	// 常规扫描仍不重复
+	// 再次强制扫描：重新广播语义，每次触发都会再次通知
+	sc.Run(context.Background(), true)
+	if got := notifCount(t, st, models.NotifNewTag); got != 2 {
+		t.Errorf("second force rescan new-tag notifs = %d, want 2 (force re-broadcasts every time)", got)
+	}
+
+	// 常规扫描仍受 seen-tags 基线约束，不再新增
 	sc.Run(context.Background(), false)
-	if got := notifCount(t, st, models.NotifNewTag); got != 1 {
-		t.Errorf("regular scan after notify = %d, want 1", got)
+	if got := notifCount(t, st, models.NotifNewTag); got != 2 {
+		t.Errorf("regular scan after force new-tag notifs = %d, want 2 (no new)", got)
 	}
 }
 
 // TestForceRescanNoNewerVersionTagSilent 负例：仓库不存在比锁定 tag 更高的版本
-// （含同版本 -alpine 变体、更老的 8.4.4）时不推送。
+// （含同版本 -alpine 变体、更老的 8.4.4）时，强制扫描不产生 new-tag 重播。
 func TestForceRescanNoNewerVersionTagSilent(t *testing.T) {
 	tags := []string{"8.4.5", "8.4.5-alpine", "8.4.4", "latest"}
 	reg, regSrv, _, _ := newFakeRegistry(t, "library/nginx", "8.4.5", "fixeddigest", tags)
@@ -326,71 +296,10 @@ func TestForceRescanNoNewerVersionTagSilent(t *testing.T) {
 	if got := notifCount(t, st, models.NotifNewTag); got != 0 {
 		t.Errorf("force rescan with no newer version tag notifs = %d, want 0", got)
 	}
-	if rec := updateRecord(t, st, "nginx:8.4.5"); len(rec.Candidates) != 0 {
-		t.Errorf("candidates = %v, want empty (same-version variants excluded)", rec.Candidates)
-	}
-}
-
-// TestLowerVersionTagNotifiesWithLegacyTemplate 回归：低版本/其它分支新 tag 也要提醒。
-// 文案恢复旧版「⭐ 镜像出现更新的独立版本 / 可选新版本」，同一镜像当轮只发一条；
-// 即使没有可升级差异（当前已在最高版本），该未读条目在页面仍可见。
-func TestLowerVersionTagNotifiesWithLegacyTemplate(t *testing.T) {
-	tags := []string{"8.4.8-alpine", "8.4.0", "7.4.12-alpine", "latest"}
-	reg1, regSrv1, _, _ := newFakeRegistry(t, "library/redis", "8.4.8-alpine", "fixeddigest", tags)
-	defer regSrv1.Close()
-
-	st, _ := store.Open(":memory:")
-	cfg := &config.Config{DefaultWatch: []string{"redis:8.4.8-alpine"}, DisableDefault: false}
-	sc := New(cfg, st, nil, reg1, config.NewLiveSettings(3600, false, "", false))
-
-	sc.Run(context.Background(), false) // 首扫建立已见标签基线
-	if got := notifCount(t, st, models.NotifNewTag); got != 0 {
-		t.Fatalf("baseline new-tag notifs = %d, want 0", got)
-	}
-
-	// 仓库发布 7.4 分支补丁 7.4.13-alpine（低于当前 8.4.8）→ 也要提醒
-	reg2, regSrv2, _, _ := newFakeRegistry(t, "library/redis", "8.4.8-alpine", "fixeddigest",
-		append(append([]string{}, tags...), "7.4.13-alpine"))
-	defer regSrv2.Close()
-	sc.SetRegistry(reg2)
-	sc.Run(context.Background(), false)
-
-	if got := notifCount(t, st, models.NotifNewTag); got != 1 {
-		t.Fatalf("lower version tag notifs = %d, want 1", got)
-	}
-	all, _ := st.ListNotifications(false, 0)
-	if all[0].NewTag != "7.4.13-alpine" {
-		t.Errorf("notified tag = %q, want 7.4.13-alpine", all[0].NewTag)
-	}
-	for _, want := range []string{"镜像出现更新的独立版本", "可选新版本", "7.4.13-alpine"} {
-		if !strings.Contains(all[0].Message, want) {
-			t.Errorf("message missing %q: %q", want, all[0].Message)
-		}
-	}
-
-	rec := updateRecord(t, st, "redis:8.4.8-alpine")
-	if rec.Status != models.UpdateUnread {
-		t.Errorf("status = %q, want unread", rec.Status)
-	}
-	if len(rec.NewTags) != 1 || rec.NewTags[0] != "7.4.13-alpine" {
-		t.Errorf("new_tags = %v, want [7.4.13-alpine]", rec.NewTags)
-	}
-	if rec.HasUpdate {
-		t.Error("lower branch tag should not create an upgrade diff")
-	}
-	if list, _ := st.ListImageUpdates(""); len(list) != 1 {
-		t.Errorf("unread lower-tag record not listed: %+v", list)
-	}
-
-	// 相同 tag 下轮不再重复
-	sc.Run(context.Background(), false)
-	if got := notifCount(t, st, models.NotifNewTag); got != 1 {
-		t.Errorf("repeat scan notifs = %d, want 1", got)
-	}
 }
 
 // TestForceScanSameRoundFreshTagNotDuplicated 强制扫描与全新 tag 上线同轮发生时，
-// 仍只产生一条聚合通知（候选版本合并），不会因强制扫描额外重播。
+// 常规路径已通知该 tag，强制重播跳过，同轮只此一条。
 func TestForceScanSameRoundFreshTagNotDuplicated(t *testing.T) {
 	reg1, regSrv1, _, _ := newFakeRegistry(t, "library/mysql", "8.4.7", "fixeddigest", []string{"8.4.7", "latest"})
 	defer regSrv1.Close()

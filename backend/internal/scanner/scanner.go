@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,13 +46,26 @@ func (s *Scanner) registry() *registry.Client { return s.reg.Load() }
 func (s *Scanner) DefaultWatchRefs() []string { return s.cfg.DefaultWatch }
 
 // notifyUpdate 异步扇出「有新版本」通知到所有启用渠道；未配置渠道时静默跳过。
-// 聚合记录已同步落库，外部推送失败只记日志、不回滚。
-func (s *Scanner) notifyUpdate(ref string, msg notification.Message) {
+// latestTag 是仓库远端版本号最高的 tag（尽力而为，取不到传空串）。
+// 站内通知已同步落库，外部推送失败只记日志、不回滚。
+func (s *Scanner) notifyUpdate(ref, oldDigest, newDigest, latestTag string) {
 	channels, err := s.store.ListChannels(true)
 	if err != nil || len(channels) == 0 {
 		return
 	}
+	msg := notification.UpdateMessage(ref, oldDigest, newDigest, latestTag)
 	s.fanout(channels, msg, "update", ref)
+}
+
+// notifyNewTag 异步扇出「可选更新」（新版本标签）通知到所有启用渠道。
+// aliases 是同 digest 的其余别名 tag，随主 tag 一并展示。
+func (s *Scanner) notifyNewTag(ref, curTag, newTag string, aliases []string) {
+	channels, err := s.store.ListChannels(true)
+	if err != nil || len(channels) == 0 {
+		return
+	}
+	msg := notification.NewTagMessage(ref, curTag, newTag, aliases)
+	s.fanout(channels, msg, "new-tag", ref)
 }
 
 // fanout 把消息并行发送到全部启用渠道，逐渠道上报失败（不互相阻塞、不打断扫描）。
@@ -118,12 +132,13 @@ func (s *Scanner) collectJobs(ctx context.Context) []job {
 	return jobs
 }
 
-// process 处理单个镜像：拉取远端摘要、比较、落库，并提交聚合更新记录。
+// process 处理单个镜像：拉取远端摘要、比较、落库，按生效检测模式生成通知。
 //
-// 推送判定由 store.MergeImageUpdate 统一负责（同一镜像同一状态只推一次），
-// 因此定时扫描与「全部重新扫描」都不会对相同版本重复提醒；强制扫描只重新检测、
-// 刷新聚合记录，不改变去重语义。
-func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
+// force=true 时为「强制扫描」：无视去重与已读，对所有存在版本差异的镜像
+// 重新广播 update 通知（含 Pin-Watch 锁定 tag 被覆盖的情况）；纯远端监控镜像
+// 的差异基线从版本时间线重建（prevRemote 已随扫描滚动覆盖，不可用）；
+// Pin-Watch 镜像还按版本号重播「远端存在更高版本 tag」提醒（含首巡基线吞掉的）。
+func (s *Scanner) process(ctx context.Context, j job, force bool) (bool, error) {
 	ref := registry.ParseRef(j.reference)
 	existing, _ := s.store.GetImageByRef(j.reference)
 
@@ -191,111 +206,83 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 		_ = s.store.AddVersion(img.ID, remote, ref.Tag)
 	}
 
-	// Pin-Watch 需要上一轮聚合记录：已通过「可选新版本」提醒过的更高版本不再重复播报。
-	var prevUpdate *models.ImageUpdate
-	if effective == models.ModePinWatch {
-		prevUpdate, _ = s.store.GetImageUpdate(img.ID)
-	}
-
 	found := false
 	if rerr == nil && remote != "" {
 		// 差异基线（old 即「用户当前持有的」摘要）：
 		//   - 有本地镜像：本地摘要就是持有版本，差异=本地≠远端（持久，直到拉取）；
-		//   - 纯远端监控：上轮远端 prevRemote（随扫描滚动覆盖，仅用于当轮展示）。
+		//   - 纯远端监控常规扫描：上轮远端 prevRemote，但它随扫描滚动覆盖，差异仅转移当轮可见；
+		//   - 纯远端监控强制扫描：改取版本时间线最早记录的摘要作基线，仅当与当前远端不同
+		//     才按「从未通知过」重建差异并重新广播（prevRemote 滚动后不可复用、也不代表持有版本）。
 		baseline := j.localDigest
 		if baseline == "" && prevRemote != "" {
 			baseline = prevRemote
 		}
-
-		digestNotifiable := effective == models.ModeDigestOnly
-		// 版本信息按需获取：Pin-Watch 每轮巡检 tags/list（本来就要拉取）；
-		// Digest-Only 仅在摘要发生变化（可能推送）时补查一次，避免给每个镜像
-		// 每轮都增加一次 tags/list 请求。拉取失败时 VersionKnown=false，
-		// 存储层沿用上轮版本，避免接口抖动被误判成版本变化。
-		needVersionInfo := effective == models.ModePinWatch || (digestNotifiable && changed)
-		var (
-			latestVersion  string
-			candidates     []string
-			newVersionTags []string
-			versionKnown   bool
-		)
-		if needVersionInfo {
-			tags, terr := s.listTags(ctx, ref)
-			switch {
-			case terr != nil:
-				log.Printf("tags/list for %s failed, keeping previous version info: %v", j.reference, terr)
-			case len(tags) > 0:
-				versionKnown = true
-				// 用 BestTag 而非 LatestTag：同版本别名（0.31 / 0.31.0）比较相等时
-				// 选展示优先级更高（段数更全）的那个，页面/通知里的版本号更明确。
-				latestVersion = version.BestTag(tags)
-				candidates = candidateVersions(tags, ref.Tag, effective == models.ModePinWatch)
-				if effective == models.ModePinWatch {
-					var notified []string
-					if prevUpdate != nil {
-						notified = prevUpdate.Candidates
-					}
-					// 「可选新版本」语义：仓库任何新出现的版本 tag（含低版本/其它分支）
-					// 都提醒一次；已见标签基线负责跨轮去重。
-					newVersionTags = s.collectNewVersionTags(img.ID, tags, notified)
-				}
+		if force && j.localDigest == "" {
+			first, ferr := s.store.FirstVersionDigest(img.ID)
+			if ferr != nil {
+				log.Printf("force rescan baseline lookup failed for %s: %v", j.reference, ferr)
+			} else if first != "" && first != remote {
+				baseline = first
 			}
 		}
+		diff := baseline != "" && baseline != remote
 
-		// 恢复旧版「⭐ 镜像出现更新的独立版本 / 可选新版本」文案：本轮有新 tag 时
-		// 用该模板（多 tag 合并为一条），纯摘要变化仍用聚合摘要模板。
-		var msg notification.Message
-		if len(newVersionTags) > 0 {
-			msg = notification.NewTagSummaryMessage(j.reference, ref.Tag, newVersionTags)
-		} else {
-			msg = notification.UpdateSummaryMessage(j.reference, ref.Tag, baseline, remote, latestVersion, candidates)
+		// 同一个 digest 常规扫描只通知一次（防刷屏）
+		notified, _ := s.store.HasDigestNotification(img.ID, remote)
+		shouldNotify := false
+		switch {
+		case effective == models.ModeDigestOnly && changed && status == models.StatusUpdateAvailable:
+			// 常规扫描：浮动/仅摘要模式下当前 tag 内容更新 → 强提醒（系统+钉钉）
+			shouldNotify = true
+		case force && diff:
+			// 强制扫描：对所有当前存在版本差异的镜像补发通知，
+			// 含 Pin-Watch 锁定 tag 被覆盖（常规扫描对 Pin-Watch 的 digest 变化不告警）。
+			shouldNotify = true
 		}
-		rec, notify, uerr := s.store.MergeImageUpdate(store.UpdateInput{
-			ImageID:          img.ID,
-			ImageName:        ref.Repo,
-			Reference:        j.reference,
-			CurrentVersion:   ref.Tag,
-			CurrentDigest:    remote,
-			BaseDigest:       baseline,
-			LatestVersion:    latestVersion,
-			VersionKnown:     versionKnown,
-			Candidates:       candidates,
-			NewVersionTags:   newVersionTags,
-			DigestNotifiable: digestNotifiable,
-			Message:          msg.Text,
-		})
-		if uerr != nil {
-			return false, uerr
+		// 去重闸门：常规扫描下同一 digest 只通知一次（防刷屏）。
+		// 强制扫描（「全部重新扫描」）语义为重新广播：无论历史是否通知过、
+		// 用户是否已读，只要存在版本差异就再次通知（系统 + 钉钉）。
+		willNotify := shouldNotify && (!notified || force)
+		// 存量通知回填：latest_tag 是后加列，历史 update 通知没有版本号，
+		// 页面会退化成无信息量的回退文案。仅当该镜像确有缺值行时才判定（补全后不再触发），
+		// 命中才请求 tags/list 并回填，不给常规扫描增加额外开销。
+		backfillNeeded := false
+		if b, berr := s.store.HasNotificationMissingLatestTag(img.ID); berr == nil {
+			backfillNeeded = b
 		}
-		if notify {
-			// 推送历史留档：按触发原因落 type，页面主数据仍是聚合记录。
-			typ := models.NotifUpdate
-			newTag := ref.Tag
-			switch {
-			case len(newVersionTags) > 0:
-				// 优先记录本轮新出现的版本 tag（可能是低版本分支补丁）。
-				typ = models.NotifNewTag
-				newTag = newVersionTags[0]
-			case rec.Reason == models.UpdateReasonVersion:
-				typ = models.NotifNewTag
-				newTag = rec.LatestVersion
-				if newTag == "" && len(rec.Candidates) > 0 {
-					newTag = rec.Candidates[0]
-				}
-			}
+		// latestTag：尽力查出仓库远端版本号最高的 tag（如 v1.4.1），供新通知与存量回填使用；
+		// tags/list 不可用或仓库无版本 tag 时为空，提醒内容跳过该行，不影响通知本身。
+		var latestTag string
+		if willNotify || backfillNeeded {
+			latestTag = s.latestRemoteVersionTag(ctx, ref)
+		}
+		if backfillNeeded && latestTag != "" {
+			_, _ = s.store.BackfillNotificationLatestTag(img.ID, latestTag)
+		}
+		if willNotify {
+			old := baseline
+			msg := fmt.Sprintf("镜像 %s 检测到新版本（远端摘要已变更）", j.reference)
 			_ = s.store.CreateNotification(&models.Notification{
 				ImageID:   img.ID,
 				ImageName: ref.Repo,
 				Reference: j.reference,
-				OldDigest: baseline,
+				OldDigest: old,
 				NewDigest: remote,
 				OldTag:    ref.Tag,
-				NewTag:    newTag,
-				LatestTag: rec.LatestVersion,
-				Type:      typ,
-				Message:   msg.Text,
+				NewTag:    ref.Tag,
+				LatestTag: latestTag,
+				Type:      models.NotifUpdate,
+				Message:   msg,
 			})
-			s.notifyUpdate(j.reference, msg)
+			s.notifyUpdate(j.reference, old, remote, latestTag)
+			found = true
+		}
+	}
+
+	// Pin-Watch 模式：巡检仓库 tag 列表，发现从未见过的新版本 tag → 弱提醒；
+	// 强制扫描时额外按版本号重播「远端存在更高版本 tag」的提醒（见 inspectTags）。
+	if rerr == nil && effective == models.ModePinWatch {
+		if s.inspectTags(ctx, img, force) {
 			found = true
 		}
 	}
@@ -303,91 +290,207 @@ func (s *Scanner) process(ctx context.Context, j job) (bool, error) {
 	return found, nil
 }
 
-// candidateVersions 返回仓库中的候选版本 tag（去重后按版本号降序）：
-//   - 当前 tag 可解析为版本号：只取版本号更高者（Digest-Only 浮动 tag 无大小语义）；
-//   - 当前 tag 不可解析但处于 Pin-Watch（如手动锁定 stable）：仓库全部版本 tag
-//     都算可选版本，保持「出现新版本 tag 就提醒」的既有语义。
+// inspectTags 巡检仓库标签列表（仅 Pin-Watch 模式）：
 //
-// 去重规则见 version.DedupTags：同版本别名（0.31 / 0.31.0）只留一个。
-func candidateVersions(tags []string, current string, pinWatch bool) []string {
-	curNums, ok := version.ParseTag(current)
-	out := make([]string, 0, len(tags))
+//	首次巡检把全部标签记为已见并建立基线（不通知）；
+//	之后出现从未见过的版本 tag → 按远端 digest 归并后，每组生成一条 type=new-tag
+//	通知（每个 tag 仅一次）：指向同一镜像（同 digest）的多个别名 tag 合并为一条，
+//	主 tag 取版本号最高者，其余列在括号里，避免同一版本被重复提醒；
+//	并把新 tag 记入已见清单；非版本标签也记为已见但不会触发通知。
+//	force=true（「全部重新扫描」）时按版本号比对整个 tag 列表：存在比当前锁定 tag
+//	更高的版本 → 重播最新一个的 new-tag 通知，无视已见基线与历史通知（基线吞掉的
+//	更高版本由此找回），每次强制扫描都会再次提醒；若该 tag 已在本次扫描的新 tag
+//	通知中播报过则跳过，避免同轮重复。
+func (s *Scanner) inspectTags(ctx context.Context, img *models.Image, force bool) bool {
+	if img == nil || img.ID == 0 {
+		return false
+	}
+	tags, err := s.registry().ListTags(ctx, registry.ImageRef{Registry: img.Registry, Repo: img.Name, Tag: img.Tag})
+	if err != nil || len(tags) == 0 {
+		return false
+	}
+
+	seen, serr := s.store.GetSeenTags(img.ID)
+	if serr != nil {
+		seen = map[string]bool{}
+	}
+
+	// 首次巡检：建立基线，全部记为已见，常规路径不打扰
+	firstInspection := len(seen) == 0
+	if firstInspection {
+		_ = s.store.AddSeenTags(img.ID, tags)
+	}
+
+	found := false
+	fresh := map[string]bool{}
+	if !firstInspection {
+		// 收集本次新出现的 tag（含非版本 tag），并筛出版本 tag 用于通知
+		unseen := make([]string, 0, len(tags))
+		var freshVersionTags []string
+		for _, t := range tags {
+			if seen[t] {
+				continue
+			}
+			unseen = append(unseen, t)
+			if _, ok := version.ParseTag(t); ok {
+				fresh[t] = true
+				freshVersionTags = append(freshVersionTags, t)
+			}
+		}
+		if len(unseen) > 0 {
+			_ = s.store.AddSeenTags(img.ID, unseen)
+		}
+
+		// 同一远端镜像常被上游打多个别名 tag（如 0.31 与 0.31.0 同 digest）：
+		// 按 digest 归并为一组，只发一条通知，主 tag 取版本最高者、其余列别名，
+		// 避免同一版本被重复提醒。
+		groups := s.groupNewTagsByDigest(ctx, img, freshVersionTags)
+		for _, g := range groups {
+			label := notification.FormatNewerTag(g.primary, g.aliases)
+			msg := fmt.Sprintf("仓库 %s 发布新版本标签 %s（当前锁定 %s）", img.Name, label, img.Tag)
+			_ = s.store.CreateNotification(&models.Notification{
+				ImageID:   img.ID,
+				ImageName: img.Name,
+				Reference: img.Reference,
+				OldTag:    img.Tag,
+				NewTag:    g.primary,
+				Type:      models.NotifNewTag,
+				Message:   msg,
+			})
+			s.notifyNewTag(img.Reference, img.Tag, g.primary, g.aliases)
+		}
+		found = len(groups) > 0
+	}
+
+	// 强制扫描重播：取比锁定 tag 更新的最高版本 tag；已在本次通知过则跳过。
+	if force {
+		if groups := s.groupNewTagsByDigest(ctx, img, newerVersionTags(tags, img.Tag)); len(groups) > 0 {
+			best := groups[0] // 已按版本新→旧排序，首个即最高版本
+			if !fresh[best.primary] {
+				label := notification.FormatNewerTag(best.primary, best.aliases)
+				msg := fmt.Sprintf("强制扫描：仓库 %s 已存在更高版本标签 %s（当前锁定 %s）", img.Name, label, img.Tag)
+				_ = s.store.CreateNotification(&models.Notification{
+					ImageID:   img.ID,
+					ImageName: img.Name,
+					Reference: img.Reference,
+					OldTag:    img.Tag,
+					NewTag:    best.primary,
+					Type:      models.NotifNewTag,
+					Message:   msg,
+				})
+				s.notifyNewTag(img.Reference, img.Tag, best.primary, best.aliases)
+				found = true
+			}
+		}
+	}
+	return found
+}
+
+// tagDigestGroup 是一组指向同一远端 manifest 的版本 tag：primary 为主展示 tag
+// （组内版本号最高者），aliases 为其余同 digest 别名 tag。
+type tagDigestGroup struct {
+	primary string
+	aliases []string
+}
+
+// groupNewTagsByDigest 把一组新出现的版本 tag 按远端 manifest digest 归并：
+// 指向同一镜像的多个别名 tag 合并为一组，选版本最高者作代表、其余作别名，
+// 避免同一版本被多个标签重复提醒。digest 取不到（网络/权限/接口禁用）时该
+// tag 单独成组，保证不丢提醒也不误并。结果按代表 tag 版本新→旧排序。
+func (s *Scanner) groupNewTagsByDigest(ctx context.Context, img *models.Image, tags []string) []tagDigestGroup {
+	if len(tags) == 0 {
+		return nil
+	}
+	if len(tags) == 1 {
+		return []tagDigestGroup{{primary: tags[0]}}
+	}
+
+	type lookup struct {
+		tag string
+		dig string
+		ok  bool
+	}
+	results := make([]lookup, len(tags))
+	sem := make(chan struct{}, 6)
+	var wg sync.WaitGroup
+	for i, t := range tags {
+		wg.Add(1)
+		go func(i int, t string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			dig, err := s.registry().ManifestDigest(dctx, registry.ImageRef{Registry: img.Registry, Repo: img.Name, Tag: t})
+			results[i] = lookup{tag: t, dig: dig, ok: err == nil && dig != ""}
+		}(i, t)
+	}
+	wg.Wait()
+
+	byDigest := map[string][]string{}
+	order := make([]string, 0, len(tags))
+	for _, r := range results {
+		key := r.dig
+		if !r.ok {
+			key = "tag:" + r.tag // 取不到 digest：单独成组，避免与未知项误并
+		}
+		if _, seen := byDigest[key]; !seen {
+			order = append(order, key)
+		}
+		byDigest[key] = append(byDigest[key], r.tag)
+	}
+
+	groups := make([]tagDigestGroup, 0, len(order))
+	for _, key := range order {
+		ts := byDigest[key]
+		primary := version.BestTag(ts)
+		if primary == "" {
+			primary = ts[0]
+		}
+		aliases := make([]string, 0, len(ts)-1)
+		for _, t := range ts {
+			if t != primary {
+				aliases = append(aliases, t)
+			}
+		}
+		version.SortTags(aliases)
+		groups = append(groups, tagDigestGroup{primary: primary, aliases: aliases})
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		return version.CompareTag(groups[i].primary, groups[j].primary) > 0
+	})
+	return groups
+}
+
+// newerVersionTags 返回仓库 tag 列表中版本号高于 pinned 的全部 tag；
+// pinned 无法解析为版本号时返回空（浮动/描述性 tag 无大小语义）。
+func newerVersionTags(tags []string, pinned string) []string {
+	curNums, ok := version.ParseTag(pinned)
+	if !ok {
+		return nil
+	}
+	var out []string
 	for _, t := range tags {
-		n, nok := version.ParseTag(t)
-		if !nok {
-			continue
-		}
-		if ok && version.Compare(n, curNums) <= 0 {
-			continue
-		}
-		if !ok && !pinWatch {
+		n, ok := version.ParseTag(t)
+		if !ok || version.Compare(n, curNums) <= 0 {
 			continue
 		}
 		out = append(out, t)
 	}
-	return version.DedupTags(out)
+	return out
 }
 
-// collectNewVersionTags 维护 Pin-Watch 的已见标签基线，返回本轮首次出现的版本 tag：
-//   - 首次巡检（已见表为空）：把当前全部 tag 记为基线，不提醒（与旧版一致）；
-//   - 之后任何未见的版本 tag 都算「新发布」，高版本与低版本/其它分支补丁都提醒；
-//   - 已进入聚合记录候选列表的更高版本会被剔除，避免 v1.7.0 升级或回填时重复提醒。
-//
-// 已见标签表（image_seen_tags）从旧版本延续，升级后仍能准确判断「哪些是新 tag」。
-func (s *Scanner) collectNewVersionTags(imageID int64, tags, notified []string) []string {
-	seen, err := s.store.GetSeenTags(imageID)
-	if err != nil {
-		log.Printf("load seen tags for image %d: %v", imageID, err)
-		return nil
-	}
-	if len(seen) == 0 {
-		if err := s.store.AddSeenTags(imageID, tags); err != nil {
-			log.Printf("init seen tags for image %d: %v", imageID, err)
-		}
-		return nil
-	}
-
-	unseen := make([]string, 0, len(tags))
-	versionTags := make([]string, 0, len(tags))
-	for _, t := range tags {
-		if seen[t] {
-			continue
-		}
-		unseen = append(unseen, t)
-		if _, ok := version.ParseTag(t); ok {
-			versionTags = append(versionTags, t)
-		}
-	}
-	if len(unseen) > 0 {
-		if err := s.store.AddSeenTags(imageID, unseen); err != nil {
-			log.Printf("record seen tags for image %d: %v", imageID, err)
-		}
-	}
-	if len(versionTags) == 0 {
-		return nil
-	}
-
-	alreadyNotified := make(map[string]bool, len(notified))
-	for _, t := range notified {
-		alreadyNotified[t] = true
-	}
-	fresh := make([]string, 0, len(versionTags))
-	for _, t := range version.DedupTags(versionTags) {
-		if !alreadyNotified[t] {
-			fresh = append(fresh, t)
-		}
-	}
-	if len(fresh) == 0 {
-		return nil
-	}
-	return fresh
-}
-
-// listTags 拉取仓库 tag 列表：5s 超时兜底，失败由调用方决定降级策略。
-func (s *Scanner) listTags(ctx context.Context, ref registry.ImageRef) ([]string, error) {
+// latestRemoteVersionTag 尽力返回仓库远端版本号最高的 tag（如 v1.4.1）。
+// 仅在需要发出 update 通知时调用：tags/list 请求带上 5s 超时兜底，
+// 失败或仓库没有可解析的版本 tag 时返回空串（提醒不附 tag 行，不影响通知）。
+func (s *Scanner) latestRemoteVersionTag(ctx context.Context, ref registry.ImageRef) string {
 	tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	return s.registry().ListTags(tctx, ref)
+	tags, err := s.registry().ListTags(tctx, ref)
+	if err != nil || len(tags) == 0 {
+		return ""
+	}
+	return version.LatestTag(tags)
 }
 
 // computeStatus 依据本地摘要、远端摘要与上次远端摘要，判定镜像状态。
@@ -396,8 +499,8 @@ func (s *Scanner) listTags(ctx context.Context, ref registry.ImageRef) ([]string
 // 关键语义：
 //   - 首扫（prevRemote == ""）时 changed=false，即使 local!=remote，也不会触发 last_update 更新，
 //     从而避免首扫将「首次记录远端基线」误判为「有新版本」而刷通知。
-//   - Digest-Only 的推送条件是 changed && status==update-available（见 process 与
-//     store.MergeImageUpdate 的双重校验）：local!=remote 且远端相对上次变化时才提醒；
+//   - Digest-Only 常规告警的完整条件是 changed && status==update-available（见 process 通知闸门）：
+//     local!=remote 且远端相对上次变化时同时满足 → 触发 update 通知并更新 last_update。
 //     local==remote（如浮动 tag 重新推送为同一内容）时 status=up-to-date → 不告警。
 func computeStatus(local, remote, prevRemote string) (models.ImageStatus, bool) {
 	changed := prevRemote != "" && remote != "" && prevRemote != remote
@@ -427,9 +530,10 @@ func computeStatus(local, remote, prevRemote string) (models.ImageStatus, bool) 
 // IsRunning 报告是否已有扫描正在执行（供 API 层提前返回友好提示）。
 func (s *Scanner) IsRunning() bool { return s.running.Load() }
 
-// Run 执行一次完整扫描。force=true 为「全部重新扫描」：仅表示重新检测并刷新
-// 聚合记录（用于补齐失败轮次、同步版本信息），不再对相同版本重复推送——
-// 去重由 store.MergeImageUpdate 按「相对已通知状态是否变化」统一裁决。
+// Run 执行一次完整扫描。force=true 时为「强制扫描」（通知页「全部重新扫描」）：
+// 无视去重与已读，对所有存在版本差异的镜像重新广播 update 通知（含 Pin-Watch 锁定
+// tag 被覆盖、以及纯远端监控按版本时间线重建基线的镜像），并按版本号重播 Pin-Watch
+// 镜像「远端存在更高版本 tag」的提醒，每次触发都会再次通知。
 //
 // 返回是否真正启动：定时器、手动扫描、添加镜像可能并发触发，CAS 保证单飞，
 // 重复触发直接跳过（返回 false）。
@@ -439,7 +543,6 @@ func (s *Scanner) Run(ctx context.Context, force bool) bool {
 		return false
 	}
 	defer s.running.Store(false)
-	log.Printf("scan started (force=%v)", force)
 
 	scanID, err := s.store.CreateScan()
 	if err != nil {
@@ -467,7 +570,7 @@ func (s *Scanner) Run(ctx context.Context, force bool) bool {
 			defer func() { <-sem }()
 			jctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 			defer cancel()
-			uf, perr := s.process(jctx, j)
+			uf, perr := s.process(jctx, j, force)
 			mu.Lock()
 			defer mu.Unlock()
 			checked++
@@ -488,14 +591,13 @@ func (s *Scanner) Run(ctx context.Context, force bool) bool {
 		log.Printf("scan finished with %d error(s): %s", len(procErrs), errMsg)
 	}
 	_ = s.store.FinishScan(scanID, checked, updates, "done", errMsg)
-	// 目标已达成的未读记录自动转已读（本地已用上推荐版本 / 摘要已同步），
-	// 过期提醒不再占用未读角标；聚合记录与推送历史都保留可查。
-	// 强制扫描现在只做重新检测，同样执行消化，避免残留过期未读。
-	if n, err := s.store.AutoReadAchievedUpdates(); err == nil && n > 0 {
-		log.Printf("auto-read %d achieved update record(s)", n)
-	}
-	if n, err := s.store.AutoReadAchievedNotifications(); err == nil && n > 0 {
-		log.Printf("auto-read %d achieved notification(s)", n)
+	// 目标已达成的未读通知自动转已读（本地已用上通知的版本 / 摘要已同步），
+	// 过期提醒不再占用未读角标；通知行保留可查。
+	// 强制扫描是刻意的重新广播，不做此消化，保证「找回提醒」语义完整。
+	if !force {
+		if n, err := s.store.AutoReadAchievedNotifications(); err == nil && n > 0 {
+			log.Printf("auto-read %d achieved notification(s)", n)
+		}
 	}
 	// 自动保留策略：扫描结束后裁剪超出上限的最老已读通知（未读永不自动删）。
 	if n, err := s.store.TrimReadNotifications(store.MaxRetainedReadNotifs); err == nil && n > 0 {
