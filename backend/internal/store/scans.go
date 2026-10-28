@@ -117,8 +117,10 @@ func (s *Store) Stats() (*models.Stats, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if unread, err := s.UnreadCount(); err != nil {
-		log.Printf("stats unread count: %v", err)
+	// 未读角标统计聚合记录（按镜像去重后的待处理项），而不是推送历史行数：
+	// 同一镜像的多条历史通知不应把角标数字放大。
+	if unread, err := s.UnreadUpdateCount(); err != nil {
+		log.Printf("stats unread update count: %v", err)
 	} else {
 		st.UnreadNotifs = unread
 	}

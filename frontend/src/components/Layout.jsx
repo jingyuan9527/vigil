@@ -23,8 +23,9 @@ export default function Layout() {
 
   const refresh = async () => {
     try {
-      const n = await api.notifications(true)
-      setUnread(n.count || 0)
+      // 角标取聚合记录的未读数（每镜像至多算一次），不再按推送历史行数累加
+      const st = await api.stats()
+      setUnread(st.unread_notifications || 0)
       const s = await api.scans()
       if (s.scans && s.scans.length) setLastScan(s.scans[0])
     } catch {

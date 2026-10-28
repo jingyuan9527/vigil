@@ -59,6 +59,12 @@ export const api = {
   image: (id) => getJSON('/images/' + id),
   scans: () => getJSON('/scans'),
   notifications: (unread, cursor) => getJSON('/notifications' + (unread ? '?unread=1' : '') + (cursor ? '&cursor=' + cursor : '')),
+  // 更新通知：按镜像聚合的记录（每镜像至多一条），status 可选 unread/read/ignored
+  updates: (status) => getJSON('/updates' + (status ? `?status=${status}` : '')),
+  markUpdateRead: (id) => postJSON(`/updates/${id}/read`),
+  markAllUpdatesRead: () => postJSON('/updates/read-all'),
+  ignoreUpdate: (id) => postJSON(`/updates/${id}/ignore`),
+  unignoreUpdate: (id) => postJSON(`/updates/${id}/unignore`),
   scanNow: (force) => postJSON('/scan' + (force ? '?force=1' : '')),
   settings: () => getJSON('/settings'),
   saveSettings: (s) => putJSON('/settings', s),

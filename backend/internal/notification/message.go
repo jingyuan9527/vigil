@@ -72,6 +72,51 @@ func NewTagMessage(imageRef, currentTag, newerTag string, aliases []string) Mess
 	}
 }
 
+// UpdateSummaryMessage 构建「按镜像聚合」的更新提醒：同一条消息内给出当前监控版本、
+// 最新版本、候选版本（已去重排序）与摘要变化。一次检测周期内发现的多个候选版本
+// 合并在此一条消息里，避免同一镜像被多条通知拆散。
+// latestVersion 为空（仓库无版本 tag）时省略版本行；oldDigest 与 newDigest 相同时省略摘要行。
+func UpdateSummaryMessage(imageRef, currentVersion, oldDigest, newDigest, latestVersion string, candidates []string) Message {
+	now := time.Now().Format("2006-01-02 15:04:05")
+	md := []string{"### 🔔 镜像更新提醒", "", "**镜像**: " + imageRef, ""}
+	text := []string{"🔔 镜像更新提醒", "", "镜像: " + imageRef, ""}
+	if currentVersion != "" {
+		md = append(md, "**当前监控版本**: `"+currentVersion+"`", "")
+		text = append(text, "当前监控版本: "+currentVersion, "")
+	}
+	if latestVersion != "" && latestVersion != currentVersion {
+		md = append(md, "**最新版本**: `"+latestVersion+"`", "")
+		text = append(text, "最新版本: "+latestVersion, "")
+	}
+	if len(candidates) > 0 {
+		label := FormatCandidates(candidates)
+		md = append(md, "**候选版本**: `"+label+"`", "")
+		text = append(text, "候选版本: "+label, "")
+	}
+	if oldDigest != "" && newDigest != "" && oldDigest != newDigest {
+		md = append(md, "**旧摘要**: `"+oldDigest+"`", "", "**新摘要**: `"+newDigest+"`", "")
+		text = append(text, "旧摘要: "+oldDigest, "", "新摘要: "+newDigest, "")
+	}
+	md = append(md, "**时间**: "+now)
+	text = append(text, "时间: "+now)
+	return Message{Title: "Vigil 镜像更新通知", Markdown: strings.Join(md, "\n"), Text: strings.Join(text, "\n")}
+}
+
+// maxCandidateDisplay 是通知正文里展示候选版本的最大个数，超出折叠为「…等N个」，
+// 避免仓库历史版本很多时消息行无限长；页面仍按存储的完整列表展示。
+const maxCandidateDisplay = 5
+
+// FormatCandidates 把候选版本列表格式化为逗号分隔的单行摘要。
+func FormatCandidates(candidates []string) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	if len(candidates) <= maxCandidateDisplay {
+		return strings.Join(candidates, ", ")
+	}
+	return fmt.Sprintf("%s, …等%d个", strings.Join(candidates[:maxCandidateDisplay], ", "), len(candidates))
+}
+
 // maxTagAliases 是展示同 digest 别名 tag 的最大个数，超出折叠为「…等N个」，
 // 避免一个镜像挂几十个别名时消息行无限长。
 const maxTagAliases = 4

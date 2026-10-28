@@ -109,10 +109,35 @@ func migrate(db *sql.DB) error {
 		seen_at  TEXT NOT NULL,
 		PRIMARY KEY (image_id, tag)
 	);
+	CREATE TABLE IF NOT EXISTS image_updates (
+		image_id            INTEGER PRIMARY KEY,
+		image_name          TEXT,
+		reference           TEXT,
+		current_version     TEXT,
+		current_digest      TEXT,
+		base_digest         TEXT,
+		latest_version      TEXT NOT NULL DEFAULT '',
+		candidates          TEXT NOT NULL DEFAULT '[]',
+		has_update          INTEGER NOT NULL DEFAULT 0,
+		version_known       INTEGER NOT NULL DEFAULT 0,
+		status              TEXT NOT NULL DEFAULT 'read',
+		ignored_version     TEXT NOT NULL DEFAULT '',
+		ignored_digest      TEXT NOT NULL DEFAULT '',
+		notified_digest     TEXT NOT NULL DEFAULT '',
+		notified_latest     TEXT NOT NULL DEFAULT '',
+		notified_candidates TEXT NOT NULL DEFAULT '[]',
+		message             TEXT,
+		reason              TEXT NOT NULL DEFAULT '',
+		first_seen_at       TEXT NOT NULL,
+		last_seen_at        TEXT NOT NULL,
+		notified_at         TEXT
+	);
 	CREATE INDEX IF NOT EXISTS idx_img_ref ON images(reference);
 	CREATE INDEX IF NOT EXISTS idx_ver_img ON image_versions(image_id);
 	CREATE INDEX IF NOT EXISTS idx_notif_read ON notifications(read);
 	CREATE INDEX IF NOT EXISTS idx_seen_img ON image_seen_tags(image_id);
+	CREATE INDEX IF NOT EXISTS idx_upd_status ON image_updates(status);
+	CREATE INDEX IF NOT EXISTS idx_upd_has ON image_updates(has_update);
 	`
 	_, err := db.Exec(schema)
 	if err != nil {
@@ -124,6 +149,9 @@ func migrate(db *sql.DB) error {
 	_ = addColumnIfMissing(db, "images", "mode", "TEXT NOT NULL DEFAULT 'auto'")
 	_ = addColumnIfMissing(db, "notifications", "type", "TEXT NOT NULL DEFAULT 'update'")
 	_ = addColumnIfMissing(db, "notifications", "latest_tag", "TEXT NOT NULL DEFAULT ''")
+	// image_updates 为本轮新增表；列补充保持幂等，兼容已经建表的开发库。
+	_ = addColumnIfMissing(db, "image_updates", "version_known", "INTEGER NOT NULL DEFAULT 0")
+	_ = addColumnIfMissing(db, "image_updates", "has_update", "INTEGER NOT NULL DEFAULT 0")
 	// 回填：早期版本以可空方式加过该列，存量行值为 NULL，统一归一为空串
 	// （读取侧另有 NullString 兜底，此处保证数据整洁）。
 	_, _ = db.Exec(`UPDATE notifications SET latest_tag='' WHERE latest_tag IS NULL`)

@@ -70,6 +70,51 @@ type Notification struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// ImageUpdateStatus 是聚合更新记录的处理状态。
+type ImageUpdateStatus string
+
+const (
+	// UpdateUnread 版本变化已推送、用户尚未处理（计入未读角标）。
+	UpdateUnread ImageUpdateStatus = "unread"
+	// UpdateRead 用户已确认当前版本，不再计入未读角标。
+	UpdateRead ImageUpdateStatus = "read"
+	// UpdateIgnored 用户忽略当前版本：同版本不再提醒，出现更高版本时自动恢复未读。
+	UpdateIgnored ImageUpdateStatus = "ignored"
+)
+
+// 聚合更新记录的推送原因：用于自动已读判定与页面提示。
+const (
+	// UpdateReasonDigest 同一 tag 的远端摘要发生变化（浮动 tag 的内容更新）。
+	UpdateReasonDigest = "digest"
+	// UpdateReasonVersion 出现更高版本（候选版本集合或最高版本号变化）。
+	UpdateReasonVersion = "version"
+	// UpdateReasonBoth 摘要与版本号同时变化。
+	UpdateReasonBoth = "both"
+)
+
+// ImageUpdate 是按镜像聚合的更新记录：每个镜像至多一条，随检测周期原地合并，
+// 保存当前监控版本、最新版本与候选版本集合，并承载已读/忽略状态。
+// 与 notifications（推送历史流水）分离：页面展示聚合状态，历史表只做留档。
+type ImageUpdate struct {
+	ImageID        int64             `json:"image_id"`
+	ImageName      string            `json:"image_name"`
+	Reference      string            `json:"reference"`
+	CurrentVersion string            `json:"current_version"` // 当前监控的 tag（如 8.4.7）
+	CurrentDigest  string            `json:"current_digest"`  // 当前监控 tag 的远端摘要
+	BaseDigest     string            `json:"base_digest"`     // 差异基线（本地持有摘要；纯远端监控为上次记录）
+	LatestVersion  string            `json:"latest_version"`  // 仓库最高版本号 tag，取不到时为空
+	Candidates     []string          `json:"candidates"`      // 高于当前版本的候选版本，去重并按版本降序
+	HasUpdate      bool              `json:"has_update"`      // 当前是否存在待处理差异（无差异的记录不展示）
+	Status         ImageUpdateStatus `json:"status"`
+	IgnoredVersion string            `json:"ignored_version,omitempty"` // 被忽略的版本号（忽略到下一个版本）
+	IgnoredDigest  string            `json:"ignored_digest,omitempty"`  // 无版本号仓库按摘要忽略
+	Message        string            `json:"message,omitempty"`
+	Reason         string            `json:"reason,omitempty"` // 最近一次推送原因，空表示仅建立基线
+	FirstSeenAt    time.Time         `json:"first_seen_at"`
+	LastSeenAt     time.Time         `json:"last_seen_at"`
+	NotifiedAt     *time.Time        `json:"notified_at"`
+}
+
 // Scan 是一次扫描任务的记录。
 type Scan struct {
 	ID            int64      `json:"id"`

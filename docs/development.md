@@ -58,8 +58,9 @@ backend/internal/store/
   store.go          连接、迁移（幂等 DDL）、通用工具（时间/NULL 处理）
   images.go         镜像 CRUD、忽略/模式覆写、本机已删 docker 镜像清理
   versions.go       版本时间线
-  seentags.go       pin-watch 已见标签基线
-  notifications.go  通知 CRUD、去重基线、自动已读、保留策略
+  seentags.go       pin-watch 已见标签基线（历史兼容，通知去重已由 updates.go 承接）
+  updates.go        按镜像聚合的更新记录：候选版本合并去重、版本变化判定、已读/忽略
+  notifications.go  推送历史 CRUD、自动已读、保留策略
   scans.go          扫描记录与 Stats
   auth.go           管理员账号
   settings.go       运行时设置与 JWT secret
@@ -101,7 +102,7 @@ backend/internal/store/
   - 纯逻辑（mode 解析、版本比较、状态计算）→ 单元测试；
   - 涉及 store / scanner 协作 → `*_integration_test.go`，用临时目录建真实 SQLite；
   - HTTP 层 → `httptest` 起完整路由，先走 `/api/auth/setup` 拿 token 再调受保护接口。
-- `internal/auth`（口令哈希、限流）、`internal/scanner`（检测模式、强制扫描语义）是回归重灾区，改动必须连带补测试。
+- `internal/auth`（口令哈希、限流）、`internal/scanner`（检测模式）、`internal/store/updates.go`（聚合去重、版本变化判定、忽略语义）是回归重灾区，改动必须连带补测试。
 
 ## 4. 前端规范（React）
 

@@ -57,6 +57,9 @@ func NewRouter(staticDir string, st *store.Store, sc *scanner.Scanner, reg *regi
 	mux.HandleFunc("/api/notifications/read-all", a.notificationsReadAll)
 	mux.HandleFunc("/api/notifications/clear-read", a.notificationsClearRead)
 	mux.HandleFunc("/api/notifications/", a.notificationByID)
+	mux.HandleFunc("/api/updates", a.updates)
+	mux.HandleFunc("/api/updates/read-all", a.updatesReadAll)
+	mux.HandleFunc("/api/updates/", a.updateByID)
 	mux.HandleFunc("/api/dingtalk/test", a.testDingTalk)
 	mux.HandleFunc("/api/channels", a.handleChannels)
 	mux.HandleFunc("/api/channels/", a.handleChannelByID)
@@ -552,6 +555,78 @@ func (a *api) notificationByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+}
+
+// updates 返回按镜像聚合的更新记录（每镜像至多一条，已去重合并）。
+// status 可选 unread/read/ignored；同时返回未读总数供角标使用。
+func (a *api) updates(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	status := r.URL.Query().Get("status")
+	switch models.ImageUpdateStatus(status) {
+	case "", models.UpdateUnread, models.UpdateRead, models.UpdateIgnored:
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid status"})
+		return
+	}
+	list, err := a.store.ListImageUpdates(status)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	unread, err := a.store.UnreadUpdateCount()
+	if err != nil {
+		log.Printf("unread update count: %v", err)
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"updates": list, "count": len(list), "unread": unread,
+	})
+}
+
+// updatesReadAll 将全部未读聚合记录转为已读。
+func (a *api) updatesReadAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	if err := a.store.MarkAllImageUpdatesRead(); err != nil {
+		serverError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"result": "ok"})
+}
+
+// updateByID 处理单个聚合记录的状态变更：read / ignore / unignore。
+func (a *api) updateByID(w http.ResponseWriter, r *http.Request) {
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/updates/"), "/")
+	parts := strings.Split(rest, "/")
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || len(parts) < 2 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	switch parts[1] {
+	case "read":
+		err = a.store.MarkImageUpdateRead(id)
+	case "ignore":
+		err = a.store.IgnoreImageUpdate(id)
+	case "unignore":
+		err = a.store.UnignoreImageUpdate(id)
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"result": "ok"})
 }
 
 func (a *api) notificationsReadAll(w http.ResponseWriter, r *http.Request) {
