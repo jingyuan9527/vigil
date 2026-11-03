@@ -13,6 +13,7 @@ import (
 
 	"vigil/internal/config"
 	"vigil/internal/models"
+	"vigil/internal/registry"
 	"vigil/internal/store"
 )
 
@@ -127,5 +128,114 @@ func TestAutoReadUpdateOnceSynced(t *testing.T) {
 	all, _ := st.ListNotifications(false, 0)
 	if len(all) != 1 || !all[0].Read {
 		t.Fatalf("notification row = %+v, want single read row", all)
+	}
+}
+
+// searxngTransition 复现浮动 tag 被上游反复重推：本地停在 v1，远端两轮推进
+// 到 v2、v3，留下两条未读 update；返回当前（v3）远端客户端供后续轮次复用。
+func searxngTransition(t *testing.T) (*store.Store, *config.Config, *registry.Client) {
+	t.Helper()
+	reg1, regSrv1, _, _ := newFakeRegistry(t, "searxng/searxng", "latest", "v1", nil)
+	t.Cleanup(regSrv1.Close)
+	dcli, dockerSrv := newFakeDocker(t, "searxng/searxng:latest", "v1")
+	t.Cleanup(dockerSrv.Close)
+
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	cfg := &config.Config{DefaultWatch: []string{"searxng/searxng:latest"}, DisableDefault: false}
+	scan := New(cfg, st, dcli, reg1, config.NewLiveSettings(3600, false, "", false))
+	scan.Run(context.Background(), false) // 基线：local==remote，无通知
+
+	for _, d := range []string{"v2", "v3"} {
+		reg, srv, _, _ := newFakeRegistry(t, "searxng/searxng", "latest", d, nil)
+		t.Cleanup(srv.Close)
+		scan.SetRegistry(reg)
+		scan.Run(context.Background(), false)
+	}
+	if got := unreadNotifs(t, st, models.NotifUpdate); len(got) != 2 {
+		t.Fatalf("unread update notifs = %v, want 2 (v2, v3)", got)
+	}
+
+	latest, latestSrv, _, _ := newFakeRegistry(t, "searxng/searxng", "latest", "v3", nil)
+	t.Cleanup(latestSrv.Close)
+	return st, cfg, latest
+}
+
+// TestAutoReadUpdateSupersededByNewerPull 覆盖 searxng:latest 这类被上游反复
+// 重推的浮动 tag：同一引用积累多条不同摘要的未读提醒，用户拉取到最新后，
+// 所有更早版本的「有新版本」提醒都应一并转已读，而不是只消化摘要完全相同的那条。
+func TestAutoReadUpdateSupersededByNewerPull(t *testing.T) {
+	st, cfg, latest := searxngTransition(t)
+
+	dcli, dockerSrv := newFakeDocker(t, "searxng/searxng:latest", "v3")
+	defer dockerSrv.Close()
+	New(cfg, st, dcli, latest, config.NewLiveSettings(3600, false, "", false)).Run(context.Background(), false)
+
+	if got := unreadNotifs(t, st, models.NotifUpdate); len(got) != 0 {
+		t.Fatalf("unread update after pulling latest = %v, want none", got)
+	}
+	all, _ := st.ListNotifications(false, 0)
+	if len(all) != 2 {
+		t.Fatalf("notification rows = %d, want 2", len(all))
+	}
+	for _, n := range all {
+		if !n.Read {
+			t.Errorf("notification %s -> %s still unread, want auto-read", n.OldDigest, n.NewDigest)
+		}
+	}
+}
+
+// TestAutoReadUpdateOnlyOlderThanPulled 用户拉到的版本仍落后于当前远端
+// （拉取后上游又推了一版）时，只消化「已被跨过」的历史提醒，
+// 比本地更新的那条必须保持未读。
+func TestAutoReadUpdateOnlyOlderThanPulled(t *testing.T) {
+	st, cfg, latest := searxngTransition(t)
+
+	// 本地持有 v2，远端已是 v3：v2 的提醒已达成，v3 的提醒仍需处理
+	cli, dockerSrv := newFakeDocker(t, "searxng/searxng:latest", "v2")
+	defer dockerSrv.Close()
+	New(cfg, st, cli, latest, config.NewLiveSettings(3600, false, "", false)).Run(context.Background(), false)
+
+	got := unreadNotifs(t, st, models.NotifUpdate)
+	if len(got) != 1 || got[0].NewDigest != "v3" {
+		t.Fatalf("unread update = %v, want only v3 (newer than local)", got)
+	}
+}
+
+// TestAutoReadUpdateWhenLocalJumpsToUnnotifiedDigest 用户拉到的版本 Vigil 从未
+// 通知过（拉取发生在两轮扫描之间）：本地与当前远端一致即视为已达成，
+// 该引用历史摘要的提醒一并转已读。
+func TestAutoReadUpdateWhenLocalJumpsToUnnotifiedDigest(t *testing.T) {
+	reg1, regSrv1, _, _ := newFakeRegistry(t, "searxng/searxng", "latest", "v1", nil)
+	defer regSrv1.Close()
+	dcli, dockerSrv := newFakeDocker(t, "searxng/searxng:latest", "v1")
+	defer dockerSrv.Close()
+
+	st, _ := store.Open(":memory:")
+	cfg := &config.Config{DefaultWatch: []string{"searxng/searxng:latest"}, DisableDefault: false}
+	sc := New(cfg, st, dcli, reg1, config.NewLiveSettings(3600, false, "", false))
+	sc.Run(context.Background(), false)
+
+	// 远端推进到 v2 → 一条未读提醒（本地仍是 v1）
+	reg2, regSrv2, _, _ := newFakeRegistry(t, "searxng/searxng", "latest", "v2", nil)
+	defer regSrv2.Close()
+	sc.SetRegistry(reg2)
+	sc.Run(context.Background(), false)
+	if got := unreadNotifs(t, st, models.NotifUpdate); len(got) != 1 {
+		t.Fatalf("unread update after remote moved = %v, want 1", got)
+	}
+
+	// 用户在下一轮扫描前直接拉到当时最新的 v3（Vigil 未通知过 v3）
+	reg3, regSrv3, _, _ := newFakeRegistry(t, "searxng/searxng", "latest", "v3", nil)
+	defer regSrv3.Close()
+	dcli2, dockerSrv2 := newFakeDocker(t, "searxng/searxng:latest", "v3")
+	defer dockerSrv2.Close()
+
+	New(cfg, st, dcli2, reg3, config.NewLiveSettings(3600, false, "", false)).Run(context.Background(), false)
+
+	if got := unreadNotifs(t, st, models.NotifUpdate); len(got) != 0 {
+		t.Fatalf("unread update after jump to latest = %v, want none", got)
 	}
 }

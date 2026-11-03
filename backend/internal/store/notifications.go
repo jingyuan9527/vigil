@@ -112,7 +112,13 @@ func (s *Store) ClearReadNotifications() (int64, error) {
 
 // AutoReadAchievedNotifications 将「目标已达成」的未读通知自动转已读：
 //   - new-tag：本地已存在同名且同 tag 的非缺失镜像（通知推荐的版本用户已用上）；
-//   - update：该引用的本地摘要已等于通知记录的新摘要（内容已同步到位）。
+//   - update：该引用的本地摘要已等于通知记录的新摘要（内容已同步到位），或本地
+//     已与当前远端一致、或本地持有版本比该条通知更新（同一引用下更早摘要的提醒
+//     已被这次升级跨过）。
+//
+// 后两条不可省：浮动 tag（如 searxng:latest）会被上游反复推送，同一引用会积累
+// 多条不同摘要的历史提醒；只按「本地摘要 == 通知新摘要」消化的话，用户升级到
+// 最新后旧版本提醒会永久占着未读角标，与「目标已达成」的事实不符。
 //
 // 通知行仅转已读、不删除，事件历史仍可在列表查看，未读角标不再被过期提醒占用。
 // 纯远端监控（无本地摘要）与已删除（stale）的镜像不会命中，保持人工处理。
@@ -128,12 +134,25 @@ func (s *Store) AutoReadAchievedNotifications() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// done 子查询按 id 判断「已跨过」：id 单调递增即时间序，本地持有版本的摘要
+	// 命中某条通知时，id 不大于它的历史摘要提醒都属于升级前的旧版本。
 	r2, err := s.db.Exec(`
 		UPDATE notifications SET read=1
 		WHERE read=0 AND type='update' AND new_digest <> '' AND EXISTS (
 			SELECT 1 FROM images i
 			WHERE i.reference = notifications.reference
-			  AND i.local_digest = notifications.new_digest
+			  AND i.local_digest <> ''
+			  AND (
+			    i.local_digest = notifications.new_digest
+			    OR i.local_digest = i.remote_digest
+			    OR EXISTS (
+			      SELECT 1 FROM notifications done
+			      WHERE done.reference = notifications.reference
+			        AND done.type = 'update'
+			        AND done.new_digest = i.local_digest
+			        AND done.id >= notifications.id
+			    )
+			  )
 		)`)
 	if err != nil {
 		return 0, err
