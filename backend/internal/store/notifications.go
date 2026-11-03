@@ -4,6 +4,7 @@ import (
 	"database/sql"
 
 	"vigil/internal/models"
+	"vigil/internal/version"
 )
 
 // ---- Notifications ----
@@ -111,7 +112,9 @@ func (s *Store) ClearReadNotifications() (int64, error) {
 }
 
 // AutoReadAchievedNotifications 将「目标已达成」的未读通知自动转已读：
-//   - new-tag：本地已存在同名且同 tag 的非缺失镜像（通知推荐的版本用户已用上）；
+//   - new-tag：本地已存在推荐版本的镜像——tag 完全同名、或推荐版本的摘要已落到
+//     本地任一 tag（见下方 digest 规则）、或本地版本号已不低于推荐版本
+//     （见 autoReadSupersededNewTagNotifs，覆盖别名 tag 与跨版本升级）；
 //   - update：该引用的本地摘要已等于通知记录的新摘要（内容已同步到位），或本地
 //     已与当前远端一致、或本地持有版本比该条通知更新（同一引用下更早摘要的提醒
 //     已被这次升级跨过）。
@@ -157,9 +160,90 @@ func (s *Store) AutoReadAchievedNotifications() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// new-tag 的摘要规则：通知落库时记录了推荐版本的 manifest 摘要（new_digest），
+	// 本地任一 tag 的摘要与之相同即说明用户已用上该版本——用户可能拉的是 latest
+	// 或别名 tag，tag 字符串对不上但内容一致。
+	r3, err := s.db.Exec(`
+		UPDATE notifications SET read=1
+		WHERE read=0 AND type='new-tag' AND new_digest <> '' AND EXISTS (
+			SELECT 1 FROM images i
+			WHERE i.name = notifications.image_name
+			  AND i.local_digest <> ''
+			  AND i.local_digest = notifications.new_digest
+			  AND i.status <> 'stale'
+		)`)
+	if err != nil {
+		return 0, err
+	}
 	n1, _ := r1.RowsAffected()
 	n2, _ := r2.RowsAffected()
-	return n1 + n2, nil
+	n3, _ := r3.RowsAffected()
+	n4, err := s.autoReadSupersededNewTagNotifs()
+	if err != nil {
+		return n1 + n2 + n3, err
+	}
+	return n1 + n2 + n3 + n4, nil
+}
+
+// autoReadSupersededNewTagNotifs 是 new-tag 的版本规则：同一仓库下本地已存在
+// 版本号不低于推荐版本的 tag，说明提醒推荐的版本已被跨过，未读转已读。
+//
+// 必要性：上游同一版本常打多个别名 tag（26.10 与 26.10.0、带 v 前缀），用户也可能
+// 直接升到更高版本；只按 tag 字符串相等判定会把这些提醒永久留在未读角标。
+// 比较必须在 Go 侧完成（SQLite 无法解析版本号）；未读 new-tag 通知量级很小，
+// 且只 JOIN 同仓库的本地镜像行，不构成扫描热点。
+func (s *Store) autoReadSupersededNewTagNotifs() (int64, error) {
+	rows, err := s.db.Query(`
+		SELECT n.id, n.new_tag, i.tag
+		FROM notifications n
+		JOIN images i ON i.name = n.image_name
+		WHERE n.read=0 AND n.type='new-tag' AND n.new_tag <> ''
+		  AND i.tag <> '' AND i.status <> 'stale'`)
+	if err != nil {
+		return 0, err
+	}
+	// SQLite 单连接：必须先读完并关闭结果集，才能在同一连接上执行 UPDATE，
+	// 否则会等待自己持有的连接而死锁。
+	var ids []int64
+	seen := map[int64]bool{}
+	for rows.Next() {
+		var (
+			id             int64
+			want, localTag string
+		)
+		if err := rows.Scan(&id, &want, &localTag); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if seen[id] {
+			continue
+		}
+		wantNums, okWant := version.ParseTag(want)
+		localNums, okLocal := version.ParseTag(localTag)
+		if okWant && okLocal && version.Compare(localNums, wantNums) >= 0 {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+
+	var n int64
+	for _, id := range ids {
+		res, err := s.db.Exec("UPDATE notifications SET read=1 WHERE id=? AND read=0", id)
+		if err != nil {
+			return n, err
+		}
+		if affected, err := res.RowsAffected(); err == nil {
+			n += affected
+		}
+	}
+	return n, nil
 }
 
 // ListNotifications 按创建时间倒序列出通知（每页上限 100），支持未读筛选与游标分页。

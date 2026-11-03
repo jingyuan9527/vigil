@@ -354,6 +354,7 @@ func (s *Scanner) inspectTags(ctx context.Context, img *models.Image, force bool
 				Reference: img.Reference,
 				OldTag:    img.Tag,
 				NewTag:    g.primary,
+				NewDigest: g.digest,
 				Type:      models.NotifNewTag,
 				Message:   msg,
 			})
@@ -375,6 +376,7 @@ func (s *Scanner) inspectTags(ctx context.Context, img *models.Image, force bool
 					Reference: img.Reference,
 					OldTag:    img.Tag,
 					NewTag:    best.primary,
+					NewDigest: best.digest,
 					Type:      models.NotifNewTag,
 					Message:   msg,
 				})
@@ -387,22 +389,25 @@ func (s *Scanner) inspectTags(ctx context.Context, img *models.Image, force bool
 }
 
 // tagDigestGroup 是一组指向同一远端 manifest 的版本 tag：primary 为主展示 tag
-// （组内版本号最高者），aliases 为其余同 digest 别名 tag。
+// （组内版本号最高者），aliases 为其余同 digest 别名 tag，digest 为该版本的内容摘要
+// （取不到时为空，仅用于「目标已达成」的判定，不参与展示）。
 type tagDigestGroup struct {
 	primary string
 	aliases []string
+	digest  string
 }
 
 // groupNewTagsByDigest 把一组新出现的版本 tag 按远端 manifest digest 归并：
 // 指向同一镜像的多个别名 tag 合并为一组，选版本最高者作代表、其余作别名，
 // 避免同一版本被多个标签重复提醒。digest 取不到（网络/权限/接口禁用）时该
 // tag 单独成组，保证不丢提醒也不误并。结果按代表 tag 版本新→旧排序。
+//
+// 单 tag 也照常查一次 digest：通知落库的 new_digest 是「用户是否已用上该版本」
+// 的唯一可靠证据——用户可能拉的是 latest 或别名 tag（26.10 / v26.10.0），
+// 只靠 tag 字符串相等无法判定已升级。
 func (s *Scanner) groupNewTagsByDigest(ctx context.Context, img *models.Image, tags []string) []tagDigestGroup {
 	if len(tags) == 0 {
 		return nil
-	}
-	if len(tags) == 1 {
-		return []tagDigestGroup{{primary: tags[0]}}
 	}
 
 	type lookup struct {
@@ -428,11 +433,14 @@ func (s *Scanner) groupNewTagsByDigest(ctx context.Context, img *models.Image, t
 	wg.Wait()
 
 	byDigest := map[string][]string{}
+	digestOf := map[string]string{}
 	order := make([]string, 0, len(tags))
 	for _, r := range results {
 		key := r.dig
 		if !r.ok {
 			key = "tag:" + r.tag // 取不到 digest：单独成组，避免与未知项误并
+		} else {
+			digestOf[key] = r.dig
 		}
 		if _, seen := byDigest[key]; !seen {
 			order = append(order, key)
@@ -454,7 +462,7 @@ func (s *Scanner) groupNewTagsByDigest(ctx context.Context, img *models.Image, t
 			}
 		}
 		version.SortTags(aliases)
-		groups = append(groups, tagDigestGroup{primary: primary, aliases: aliases})
+		groups = append(groups, tagDigestGroup{primary: primary, aliases: aliases, digest: digestOf[key]})
 	}
 	sort.SliceStable(groups, func(i, j int) bool {
 		return version.CompareTag(groups[i].primary, groups[j].primary) > 0

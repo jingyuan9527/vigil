@@ -204,6 +204,45 @@ func TestAutoReadUpdateOnlyOlderThanPulled(t *testing.T) {
 	}
 }
 
+// TestAutoReadNewTagByDigestAfterPullLatest 可选更新的目标版本摘要落到本地 latest 上：
+// 通知写入时记录推荐 tag 的 digest，用户拉 latest（tag 字符串完全不同）也能自动已读。
+func TestAutoReadNewTagByDigestAfterPullLatest(t *testing.T) {
+	reg1, regSrv1 := newFakeRegistryMulti(t, "neosmemo/memos",
+		map[string]string{"0.31.0": "d031"}, []string{"0.31.0"})
+	defer regSrv1.Close()
+	dcli, dockerSrv := newFakeDocker(t, "neosmemo/memos:0.31.0", "d031")
+	defer dockerSrv.Close()
+
+	st, _ := store.Open(":memory:")
+	cfg := &config.Config{DefaultWatch: []string{"neosmemo/memos:0.31.0"}, DisableDefault: false}
+	sc := New(cfg, st, dcli, reg1, config.NewLiveSettings(3600, false, "", false))
+	sc.Run(context.Background(), false) // 首扫：建立 seen 基线
+
+	// 上游发布 26.10.0 → 未读提醒，并记录推荐版本的摘要
+	reg2, regSrv2 := newFakeRegistryMulti(t, "neosmemo/memos",
+		map[string]string{"0.31.0": "d031", "26.10.0": "d2610"},
+		[]string{"0.31.0", "26.10.0"})
+	defer regSrv2.Close()
+	sc.SetRegistry(reg2)
+	sc.Run(context.Background(), false)
+	got := unreadNotifs(t, st, models.NotifNewTag)
+	if len(got) != 1 || got[0].NewDigest != "d2610" {
+		t.Fatalf("unread new-tag = %+v, want one with NewDigest=d2610", got)
+	}
+
+	// 用户改跑 latest（内容即 26.10.0）→ tag 字符串不同但摘要一致，自动转已读
+	reg3, regSrv3 := newFakeRegistryMulti(t, "neosmemo/memos",
+		map[string]string{"latest": "d2610"}, []string{"0.31.0", "26.10.0", "latest"})
+	defer regSrv3.Close()
+	dcli2, dockerSrv2 := newFakeDocker(t, "neosmemo/memos:latest", "d2610")
+	defer dockerSrv2.Close()
+	New(cfg, st, dcli2, reg3, config.NewLiveSettings(3600, false, "", false)).Run(context.Background(), false)
+
+	if got := unreadNotifs(t, st, models.NotifNewTag); len(got) != 0 {
+		t.Fatalf("unread new-tag after pulling latest = %v, want none", got)
+	}
+}
+
 // TestAutoReadUpdateWhenLocalJumpsToUnnotifiedDigest 用户拉到的版本 Vigil 从未
 // 通知过（拉取发生在两轮扫描之间）：本地与当前远端一致即视为已达成，
 // 该引用历史摘要的提醒一并转已读。
