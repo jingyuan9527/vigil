@@ -223,10 +223,41 @@ cd frontend && npm install && npm run dev
 | GET / PUT / DELETE | `/api/channels/:id` | 读取 / 更新 / 删除单条渠道 |
 | POST | `/api/channels/:id/test` | 向指定渠道发送测试消息 |
 | POST | `/api/dingtalk/test` | 测试钉钉连通性（旧接口保留：可携带 `webhook/secret`，缺省用渠道表中首条启用的钉钉渠道） |
+| GET | `/api/mcp/keys` | MCP API Key 列表（仅元数据：名称、前缀、使用时间） |
+| POST | `/api/mcp/keys` | 生成 API Key `{ "name": "..." }`（响应中的明文密钥仅此一次返回） |
+| DELETE | `/api/mcp/keys/:id` | 吊销 API Key（立即生效） |
+| POST | `/mcp` | MCP Streamable HTTP 端点（`Authorization: Bearer <API Key>`，无状态单帧响应） |
 
 > **认证与安全**：JWT 通过 `httpOnly` cookie（`SameSite=Lax`）下发，前端 JS 不接触令牌，降低 XSS 窃取风险；跨站请求不携带 cookie，天然抵御 CSRF。登录/初始化接口按 IP 限流：连续 5 次失败锁定 15 分钟。
 >
 > **扫描并发**：同一时刻只允许一次扫描执行（定时、手动、添加镜像并发触发时后到者跳过），重复触发 `/api/scan` 返回 `"result": "scan already running"`。
+
+---
+
+## MCP（AI 助手接入）
+
+Vigil 内置 MCP（Model Context Protocol）服务器，提供 stdio 与 HTTP 两种形态，供 Claude Desktop、CodeBuddy 等 AI 助手直接查询监控状态与执行标记操作：
+
+```bash
+# 形态一：stdio（本机进程，无需鉴权；数据库路径沿用 DB_PATH）
+vigil mcp   # 源码运行：go run ./cmd/server mcp
+
+# 形态二：HTTP —— Web 服务同端口挂载无状态端点 /mcp，
+# 在页面「设置 → MCP 接入」生成 API Key 后携带 Bearer 头访问
+#   POST http://your-server:54321/mcp
+#   Authorization: Bearer vigil_mcp_xxx
+```
+
+| 工具 | 类型 | 说明 |
+|------|------|------|
+| `list_images` | 只读 | 镜像列表（可按更新状态过滤） |
+| `get_image` | 只读 | 镜像详情（摘要对比 + 版本时间线） |
+| `list_notifications` | 只读 | 更新通知列表（未读过滤 + 游标翻页） |
+| `get_stats` | 只读 | 仪表盘统计 |
+| `add_ignore` / `remove_ignore` | 标记 | 忽略 / 恢复某镜像的更新提醒（支持 `id` 或 `reference` 定位） |
+| `mark_notifications_read` | 标记 | 标记通知已读（单条或全部） |
+
+安全边界：仅只读与标记两类操作，不暴露渠道配置、认证、删除等管理能力；HTTP 端点的 API Key 只在生成时展示一次（库内仅存哈希），吊销立即生效。配置示例见 [docs/mcp.md](docs/mcp.md)。
 
 ---
 
@@ -275,6 +306,7 @@ image: ghcr.io/jingyuan9527/vigil:1
 │       ├── store/          # SQLite 存储与 CRUD
 │       ├── scanner/        # 扫描编排（采集→检测→通知）
 │       ├── notification/   # 多渠道推送
+│       ├── mcp/            # 本地 MCP stdio 服务器（AI 助手接入，只读 + 标记）
 │       ├── auth/           # 认证与限流
 │       └── api/            # REST 路由 + 静态资源服务
 └── frontend/               # React + Tailwind 前端

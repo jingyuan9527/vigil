@@ -103,6 +103,14 @@ func migrate(db *sql.DB) error {
 		password_hash TEXT NOT NULL,
 		created_at    TEXT NOT NULL
 	);
+	CREATE TABLE IF NOT EXISTS mcp_api_keys (
+		id           INTEGER PRIMARY KEY AUTOINCREMENT,
+		name         TEXT NOT NULL,
+		key_prefix   TEXT NOT NULL,
+		key_hash     TEXT NOT NULL UNIQUE,
+		created_at   TEXT NOT NULL,
+		last_used_at TEXT
+	);
 	CREATE TABLE IF NOT EXISTS image_seen_tags (
 		image_id INTEGER NOT NULL,
 		tag      TEXT NOT NULL,

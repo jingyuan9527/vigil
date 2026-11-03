@@ -92,6 +92,16 @@ type Stats struct {
 	LastScanStatus  string     `json:"last_scan_status"`
 }
 
+// MCPKey 是一条 MCP 接入的 API Key 元数据（不含密钥本体）。
+// 密钥只在创建响应中出现一次，库内仅存 SHA-256 哈希与前缀展示片段。
+type MCPKey struct {
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	KeyPrefix  string     `json:"key_prefix"` // 明文前缀片段（如 vigil_a1b2c3d4…），用于辨认密钥
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at"`
+}
+
 // ImageDetail 是镜像详情，附带版本时间线与可用 tag。
 type ImageDetail struct {
 	Image    Image          `json:"image"`

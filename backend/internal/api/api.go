@@ -16,6 +16,7 @@ import (
 
 	"vigil/internal/auth"
 	"vigil/internal/config"
+	"vigil/internal/mcp"
 	"vigil/internal/models"
 	"vigil/internal/notification"
 	"vigil/internal/registry"
@@ -61,13 +62,19 @@ func NewRouter(staticDir string, st *store.Store, sc *scanner.Scanner, reg *regi
 	mux.HandleFunc("/api/channels", a.handleChannels)
 	mux.HandleFunc("/api/channels/", a.handleChannelByID)
 
+	// MCP API Key 管理（JWT 保护）；/mcp 端点自身用 API Key 鉴权，不走 JWT
+	mux.HandleFunc("/api/mcp/keys", a.handleMCPKeys)
+	mux.HandleFunc("/api/mcp/keys/", a.handleMCPKeyByID)
+	mux.Handle("/mcp", mcp.HTTPHandler(st))
+
 	// 认证中间件包裹 API 路由，静态资源不受影响
 	return a.withAuth(a.withStatic(mux))
 }
 
 func (a *api) withStatic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
+		// /api/* 与 /mcp 走注册的 handler，其余路径回退到静态资源（SPA）
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/mcp" {
 			next.ServeHTTP(w, r)
 			return
 		}

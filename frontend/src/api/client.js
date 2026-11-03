@@ -74,6 +74,11 @@ export const api = {
   markRead: (id) => postJSON('/notifications/' + id + '/read'),
   markAllRead: () => postJSON('/notifications/read-all'),
   clearReadNotifs: () => postJSON('/notifications/clear-read'),
+
+  // MCP 接入（API Key 管理）
+  mcpKeys: () => getJSON('/mcp/keys'),
+  createMCPKey: (name) => postJSON('/mcp/keys', { name }),
+  deleteMCPKey: (id) => del('/mcp/keys/' + id),
 }
 
 // 检测模式标签（用于镜像卡/对比详情展示）

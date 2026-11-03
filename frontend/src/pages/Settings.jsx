@@ -5,6 +5,7 @@ import Spinner from '../components/Spinner'
 import ErrorState from '../components/ErrorState'
 import Switch from '../components/Switch'
 import ChannelManager from '../components/ChannelManager'
+import MCPKeyManager from '../components/MCPKeyManager'
 import { useToast } from '../components/Toast'
 
 // 间隔单位与秒数的换算（展示层概念，落库仍是秒）
@@ -431,6 +432,12 @@ export default function Settings() {
         <section className="space-y-3">
           <SectionHead title="通知渠道" desc="镜像更新时并行推送到所有已启用的渠道，改动随保存即时生效。" />
           <ChannelManager />
+        </section>
+
+        {/* ── MCP 接入（独立管理，不进底部保存栏） ── */}
+        <section className="space-y-3">
+          <SectionHead title="MCP 接入" desc="生成 API Key 供 Claude Desktop、CodeBuddy 等 AI 助手通过 MCP 访问 Vigil（仅查看与标记类操作）。" />
+          <MCPKeyManager />
         </section>
 
         {/* 粘性保存栏：改动时始终可见，避免改完忘记保存 */}
