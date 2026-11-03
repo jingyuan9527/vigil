@@ -14,6 +14,7 @@ import (
 	"vigil/internal/auth"
 	"vigil/internal/config"
 	"vigil/internal/docker"
+	"vigil/internal/mcp"
 	"vigil/internal/registry"
 	"vigil/internal/scanner"
 	"vigil/internal/store"
@@ -21,6 +22,20 @@ import (
 
 func main() {
 	cfg := config.Load()
+
+	// MCP stdio 模式：`vigil mcp` 面向本机 AI 助手（Claude/CodeBuddy 等），
+	// 提供只读 + 标记类工具。与 Web 服务共用同一 SQLite 库（WAL 支持多进程），
+	// stdout 只承载协议帧，日志走 stderr。
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		st, err := store.Open(cfg.DBPath)
+		if err != nil {
+			log.Fatalf("open store: %v", err)
+		}
+		if err := mcp.RunStdio(os.Stdin, os.Stdout, st); err != nil {
+			log.Fatalf("mcp stdio: %v", err)
+		}
+		return
+	}
 
 	st, err := store.Open(cfg.DBPath)
 	if err != nil {
