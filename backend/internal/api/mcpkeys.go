@@ -91,7 +91,7 @@ func (a *api) handleMCPKeys(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]interface{}{
-			"key":  full, // 仅此一次返回明文
+			"key":    full, // 仅此一次返回明文
 			"record": mcpKeyToDTO(created),
 		})
 	default:
